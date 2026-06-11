@@ -1,0 +1,12 @@
+{
+  "template_id": "freeform",
+  "name": "Free Form Consultation Template",
+  "version": 1,
+  "hospital_id": "hosp_e",
+  "description": "Minimal template: patient info, chief complaints, free-form doctor notes.",
+  "sections": [
+    { "id": "patient_info", "component": "PATIENT_INFORMATION", "label": "Patient Information", "enabled": true, "order": 1 },
+    { "id": "chief_complaints", "component": "CHIEF_COMPLAINTS", "label": "Chief Complaints", "enabled": true, "order": 2 },
+    { "id": "notes", "component": "DOCTOR_NOTES", "label": "Consultation Notes", "enabled": true, "order": 3 }
+  ]
+}

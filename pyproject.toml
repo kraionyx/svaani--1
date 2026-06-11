@@ -1,0 +1,10 @@
+[project]
+name = "karaionyx-scribe"
+version = "0.1.0"
+description = "AI Medical Scribe — a faithful, grounded clinical documentation platform."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,17 @@
+{
+  "template_id": "string",
+  "name": "string",
+  "version": 2,
+  "hospital_id": "string",
+  "description": "string",
+  "sections": [
+    {
+      "id": "string",
+      "component": "PATIENT_INFORMATION",
+      "label": "string",
+      "enabled": true,
+      "order": 0,
+      "schema_hint": "string"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "template_id": "soap",
+  "name": "SOAP Template",
+  "version": 1,
+  "description": "Subjective / Objective / Assessment / Plan.",
+  "sections": [
+    { "id": "subjective", "component": "CHIEF_COMPLAINTS", "label": "Subjective", "enabled": true, "order": 1 },
+    { "id": "objective", "component": "EXAMINATION", "label": "Objective", "enabled": true, "order": 2 },
+    { "id": "assessment", "component": "ASSESSMENT", "label": "Assessment", "enabled": true, "order": 3 },
+    { "id": "plan", "component": "TREATMENT_PLAN", "label": "Plan", "enabled": true, "order": 4 }
+  ]
+}

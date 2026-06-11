@@ -1,0 +1,19 @@
+{
+  "template_id": "ent",
+  "name": "ENT Template",
+  "version": 1,
+  "hospital_id": "hosp_c",
+  "description": "ENT consultation with region-specific examination findings.",
+  "sections": [
+    { "id": "patient_info", "component": "PATIENT_INFORMATION", "label": "Patient Information", "enabled": true, "order": 1 },
+    { "id": "chief_complaints", "component": "CHIEF_COMPLAINTS", "label": "Chief Complaints", "enabled": true, "order": 2 },
+    { "id": "history", "component": "HISTORY_OF_PRESENT_ILLNESS", "label": "History", "enabled": true, "order": 3 },
+    { "id": "examination", "component": "EXAMINATION", "label": "Examination", "enabled": true, "order": 4 },
+    { "id": "nose", "component": "CUSTOM", "label": "Nose Findings", "enabled": true, "order": 5, "schema_hint": "examination.nose" },
+    { "id": "throat", "component": "CUSTOM", "label": "Throat Findings", "enabled": true, "order": 6, "schema_hint": "examination.throat" },
+    { "id": "ear", "component": "CUSTOM", "label": "Ear Findings", "enabled": true, "order": 7, "schema_hint": "examination.ear" },
+    { "id": "diagnosis", "component": "DIAGNOSIS", "label": "Diagnosis", "enabled": true, "order": 8 },
+    { "id": "treatment", "component": "TREATMENT_PLAN", "label": "Treatment", "enabled": true, "order": 9 },
+    { "id": "follow_up", "component": "FOLLOW_UP", "label": "Follow-up", "enabled": true, "order": 10 }
+  ]
+}
