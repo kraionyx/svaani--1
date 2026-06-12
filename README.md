@@ -1,4 +1,4 @@
-# Karaionyx — AI Medical Scribe
+# Kraionyx — AI Medical Scribe
 
 A production-oriented **AI medical scribe**: it listens to a doctor–patient
 consultation, transcribes it (Sarvam V3 `saaras:v3` — multilingual; doctor/patient
