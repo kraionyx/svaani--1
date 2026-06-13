@@ -105,7 +105,10 @@ class SarvamSTT:
             )
             job.upload_files([in_path])
             job.start()
-            job.wait_until_complete(poll_interval=5, timeout=self.settings.sarvam_batch_timeout_s)
+            job.wait_until_complete(
+                poll_interval=self.settings.sarvam_poll_interval_s,
+                timeout=self.settings.sarvam_batch_timeout_s,
+            )
             if not job.is_successful():
                 raise RuntimeError(f"Sarvam batch job not successful: {job.get_status().job_state}")
 

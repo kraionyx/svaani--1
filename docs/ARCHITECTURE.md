@@ -83,6 +83,75 @@ grounding runs **between** extraction and note so the note is built only from gr
 
 ---
 
+## 2.1 Latency optimization — before vs now
+
+The end-to-end wait the doctor sees is everything that happens **after `stop`**:
+batch STT → the LLM pipeline → note. The original design paid that bill serially on a
+reasoning model; the current design parallelizes the independent stages and uses a
+fast structuring model with "thinking" disabled. The diagrams below contrast the
+**critical path** (the chain of work that actually determines wall-clock time).
+
+### Before — serial, reasoning model, blocking
+
+```mermaid
+flowchart TD
+    STOP["🛑 Doctor presses STOP"] --> STT["Sarvam Batch diarization<br/>poll every 5s · blocks event loop"]
+    STT --> CLEAN["Clean — Gemini 2.5 <b>PRO</b><br/>(reasoning · thinking ON)"]
+    CLEAN --> EXTRACT["Extract — Gemini 2.5 <b>PRO</b>"]
+    EXTRACT --> RISK["Risk (LLM) — Gemini 2.5 <b>PRO</b>"]
+    RISK --> NOTE["Note render (deterministic)"]
+    NOTE --> DONE["📄 draft_ready"]
+
+    classDef slow fill:#fde2e2,stroke:#c0392b,color:#7b1010;
+    class STT,CLEAN,EXTRACT,RISK slow;
+```
+
+**Critical path:** `STT(poll≤5s) + Pro(clean) + Pro(extract) + Pro(risk) + render`
+— **three sequential Pro round-trips**, each carrying thinking-token latency, run
+inline on the async event loop (the socket can't even answer `ping` meanwhile).
+
+### Now — parallel, fast model, thinking off, off-loop
+
+```mermaid
+flowchart TD
+    STOP["🛑 Doctor presses STOP"] --> STT["Sarvam Batch diarization<br/>poll every 1s · runs in thread (off event loop)"]
+    STT --> CLEAN["Clean — Gemini 2.5 <b>FLASH</b><br/>(thinking OFF, budget=0)"]
+    CLEAN --> FORK{{"run concurrently<br/>(both depend only on clean)"}}
+    FORK --> EXTRACT["Extract — Flash"]
+    FORK --> RISKLLM["Risk (LLM) — Flash"]
+    EXTRACT --> GATE{{"Grounding gate"}}
+    GATE --> NOTE["Note render (deterministic)"]
+    GATE --> MERGE["Risk merge<br/>(rules + LLM markers)"]
+    RISKLLM --> MERGE
+    NOTE --> DONE["📄 draft_ready"]
+    MERGE --> DONE
+
+    classDef fast fill:#e2f7e6,stroke:#27ae60,color:#0d5a2a;
+    class CLEAN,EXTRACT,RISKLLM fast;
+```
+
+**Critical path:** `STT(poll≤1s) + Flash(clean) + max(Flash extract, Flash risk) + render`
+— **one Flash call, then two in parallel**, no thinking tokens, run in a worker
+thread so the WebSocket stays live and concurrent consults no longer serialize.
+
+### What changed (and where)
+
+| Lever | Before | Now | Where |
+|---|---|---|---|
+| Model | `gemini-2.5-pro` (reasoning) | `gemini-2.5-flash` | [`config.py`](../app/config.py), `SCRIBE_GEMINI_MODEL` |
+| Thinking | on | `thinking_budget=0` (off) | [`config.py`](../app/config.py), [`llm/vertex_gemini.py`](../app/llm/vertex_gemini.py) |
+| Extract + LLM-risk | sequential | **parallel** (both need only `clean`) | [`pipeline/orchestrator.py`](../app/pipeline/orchestrator.py), [`pipeline/risk.py`](../app/pipeline/risk.py) |
+| STT poll cadence | every 5 s | every 1 s (configurable) | [`config.py`](../app/config.py), [`stt/sarvam.py`](../app/stt/sarvam.py) |
+| Execution | inline (blocks event loop) | `asyncio.to_thread` | [`audio/ws.py`](../app/audio/ws.py), [`main.py`](../app/main.py) |
+
+All five are tuning/structure changes — the **safety contract is unchanged**: grounding
+still runs between extraction and note, risk markers stay non-authoritative, and the
+keyless mock / `DisabledLLM` fallbacks behave exactly as before. The remaining dominant
+cost is the **batch diarization job itself**; removing it needs the streaming redesign
+(§4 *Streaming vs batch*), not a tuning change.
+
+---
+
 ## 3. Service / module breakdown
 
 | Module | Responsibility | Key files |

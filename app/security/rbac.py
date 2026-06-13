@@ -29,9 +29,13 @@ class Permission(str, Enum):
 
 
 ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
+    # A clinician runs the whole workflow from one login: capture → review → edit →
+    # approve → finalize/export, and authors their own note templates. Template
+    # management is granted here (in addition to ADMIN) so a doctor never has to
+    # switch roles just to build or save a template.
     Role.DOCTOR: {
         Permission.VIEW_TRANSCRIPT, Permission.EDIT_NOTE, Permission.APPROVE_NOTE,
-        Permission.FINALIZE_NOTE, Permission.EXPORT,
+        Permission.FINALIZE_NOTE, Permission.EXPORT, Permission.MANAGE_TEMPLATES,
     },
     Role.SCRIBE: {Permission.VIEW_TRANSCRIPT, Permission.EDIT_NOTE},
     Role.ADMIN: {Permission.MANAGE_TEMPLATES, Permission.VIEW_TRANSCRIPT, Permission.EXPORT},

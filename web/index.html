@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en" data-theme="mint">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Svaani — AI Medical Scribe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;750&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="appbar">
+  <div class="brand">
+    <div class="logo">⚕</div>
+    <div>
+      <div class="name">Svaani<span>.</span></div>
+    </div>
+    <div class="sub">AI Medical Scribe — a faithful scribe, never prescribes</div>
+  </div>
+  <span class="spacer"></span>
+  <span id="hSarvam" class="pill"><span class="d"></span>STT …</span>
+  <span id="hVertex" class="pill"><span class="d"></span>LLM …</span>
+  <div class="ctrl">role
+    <select id="role">
+      <option value="doctor">doctor</option>
+      <option value="scribe">scribe</option>
+      <option value="admin">admin</option>
+      <option value="auditor">auditor</option>
+    </select>
+  </div>
+  <div class="seg-theme" id="themeSwitch">
+    <button data-theme="mint" title="Mint">Mint</button>
+    <button data-theme="light" title="White">White</button>
+    <button data-theme="dark" title="Dark">Dark</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside>
+    <div class="card">
+      <div class="step-h"><span class="n">1</span><h3>Consultation</h3></div>
+      <div class="row col">
+        <label class="lbl">Note template</label>
+        <select id="template"></select>
+        <button class="btn block" id="btnNew" style="margin-top:8px">＋ Start new consultation</button>
+        <div class="row" style="margin-top:10px">
+          <span class="kv">Session</span>
+          <span id="sessId" class="kv">—</span>
+          <span id="sessState" class="badge state-draft" style="display:none"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="step-h"><span class="n">2</span><h3>Capture audio</h3></div>
+      <div class="mic-wrap" id="micWrap">
+        <div class="mic-row">
+          <div class="mic-orb" id="micOrb">🎙️</div>
+          <canvas id="micCanvas" width="280" height="46"></canvas>
+        </div>
+        <div class="mic-status" id="micStatus">Ready — press record to start listening.</div>
+      </div>
+      <div class="row col" style="margin-top:12px">
+        <button class="btn block" id="btnRec" disabled>● Record consultation</button>
+        <div class="row">
+          <input type="file" id="file" accept="audio/*" disabled style="font-size:12px;flex:1" />
+          <button class="btn ghost sm" id="btnUpload" disabled>Upload</button>
+        </div>
+        <button class="btn subtle" id="btnSim" disabled title="Run the canned ENT consultation through the real pipeline">▶ Simulate sample consult</button>
+        <div class="hint">Mic &amp; upload use Sarvam V3 (batch diarization → speaker labels). Simulate injects a canned transcript and runs the live pipeline.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="step-h"><span class="n">3</span><h3>Review &amp; sign-off</h3></div>
+      <div class="row">
+        <button class="btn ghost sm" data-state="in_review" disabled>Start review</button>
+        <button class="btn ghost sm" data-state="approved" disabled>Approve</button>
+      </div>
+      <button class="btn block" id="btnFinalize" disabled style="margin-top:9px">✎ Finalize &amp; sign</button>
+      <div class="hint">Edit the note in the <b>Consultation note</b> tab, approve it, then finalize with a digital signature. Only a finalized, signed note can be exported.</div>
+    </div>
+
+    <div class="card">
+      <div class="step-h"><span class="n">4</span><h3>Export</h3></div>
+      <div class="row">
+        <button class="btn ghost sm ex" data-fmt="pdf" disabled>PDF</button>
+        <button class="btn ghost sm ex" data-fmt="json" disabled>JSON</button>
+        <button class="btn ghost sm ex" data-fmt="markdown" disabled>Markdown</button>
+      </div>
+    </div>
+
+    <div class="card flat">
+      <div class="step-h"><span class="n">5</span><h3>Template builder</h3></div>
+      <button class="btn ghost block" id="btnBuilder">⚙ Open builder</button>
+      <div class="hint">Drag components into the document to compose a note template, then save.</div>
+    </div>
+  </aside>
+
+  <main>
+    <div id="empty" class="card">
+      <h2 style="margin-top:0">Welcome to Svaani</h2>
+      <p class="muted">Pick a template, start a consultation, then record / upload audio or run a sample.
+        The note, risk markers, structured extraction and transcript appear here for your review,
+        editing and signature.</p>
+    </div>
+
+    <div id="work" style="display:none">
+      <div class="tabs">
+        <button data-tab="note" class="active">Consultation note</button>
+        <button data-tab="risk">Risk markers</button>
+        <button data-tab="extraction">Extraction</button>
+        <button data-tab="transcript">Transcript</button>
+        <button data-tab="grounding">Grounding</button>
+      </div>
+      <div id="tab-note" class="tabpane"></div>
+      <div id="tab-risk" class="tabpane" style="display:none"></div>
+      <div id="tab-extraction" class="tabpane" style="display:none"></div>
+      <div id="tab-transcript" class="tabpane" style="display:none"></div>
+      <div id="tab-grounding" class="tabpane" style="display:none"></div>
+    </div>
+  </main>
+</div>
+
+<!-- ===== Template builder ===== -->
+<div id="builder" class="overlay" style="display:none">
+  <div class="modal builder">
+    <div class="m-head">
+      <h3>Template builder</h3>
+      <span class="muted" style="font-size:12px">drag components → document, reorder, configure, save</span>
+      <span class="spacer"></span>
+      <button class="btn ghost sm" id="bClose">Close</button>
+    </div>
+    <div class="m-body" style="display:flex;flex-direction:column;flex:1;min-height:0">
+      <div class="builder-meta">
+        <input id="bName" placeholder="Template name (e.g. Cardiology Note)" />
+        <input id="bId" placeholder="template_id (auto from name)" />
+        <input id="bHosp" placeholder="hospital_id (optional)" />
+      </div>
+      <div class="builder-body">
+        <div class="palette" id="bPalette"><h4>Components</h4></div>
+        <div class="canvas">
+          <h4>Document</h4>
+          <div id="bDrop" class="drop empty">Drag components here</div>
+        </div>
+      </div>
+    </div>
+    <div class="m-foot">
+      <span class="hint" style="margin:0">CUSTOM blocks need a <b>schema_hint</b> (e.g. <code>examination.nose</code>).</span>
+      <span class="spacer"></span>
+      <button class="btn" id="bSave">Save template</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Finalize & sign ===== -->
+<div id="signModal" class="overlay" style="display:none">
+  <div class="modal sign">
+    <div class="m-head">
+      <h3>Finalize &amp; sign-off</h3>
+      <span class="muted" style="font-size:12px">final preview · digital signature</span>
+      <span class="spacer"></span>
+      <button class="btn ghost sm" id="sClose">Cancel</button>
+    </div>
+    <div class="m-body">
+      <div class="sign-body">
+        <div>
+          <div class="kv" style="margin-bottom:6px">Final preview</div>
+          <div class="preview" id="signPreview"></div>
+        </div>
+        <div class="sign-panel">
+          <div>
+            <label class="lbl">Signing clinician</label>
+            <div class="sig-name-row">
+              <input type="text" id="sigName" placeholder="e.g. Dr. A. Rao, ENT" />
+            </div>
+          </div>
+          <div class="sig-tabs">
+            <button class="btn subtle sm active" id="sigTabDraw">Draw</button>
+            <button class="btn subtle sm" id="sigTabUpload">Upload</button>
+          </div>
+          <div id="sigDrawPane">
+            <label class="lbl">Signature</label>
+            <div class="pad-wrap"><canvas id="sigPad" width="320" height="150"></canvas></div>
+            <div class="row" style="margin-top:8px">
+              <button class="btn ghost sm" id="sigClear">Clear</button>
+              <span class="kv">Draw with mouse or finger.</span>
+            </div>
+          </div>
+          <div id="sigUploadPane" style="display:none">
+            <label class="lbl">Signature image (PNG/JPG)</label>
+            <input type="file" id="sigFile" accept="image/png,image/jpeg" style="font-size:12px" />
+            <img id="sigUploadPreview" class="sig-upload-preview" alt="signature preview" />
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="m-foot">
+      <span class="hint" style="margin:0">A signing clinician name is required. The signature image is optional.</span>
+      <span class="spacer"></span>
+      <button class="btn" id="sConfirm">Confirm &amp; finalize</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

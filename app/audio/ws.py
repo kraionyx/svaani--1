@@ -14,6 +14,7 @@ chunks to Sarvam's streaming endpoint and emit ``partial_transcript`` events liv
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 
@@ -86,8 +87,12 @@ async def consultation_ws(websocket: WebSocket, store: SessionStore, settings: S
                 try:
                     stt = get_stt(settings)
                     # Batch-diarized when available (accurate, speaker-labeled), with
-                    # automatic real-time fallback so a note is never blocked.
-                    raw = stt.transcribe_for_session(bytes(buffer), session_id=session.session_id)
+                    # automatic real-time fallback so a note is never blocked. STT and the
+                    # pipeline are blocking, so run them in a thread to keep the event loop
+                    # responsive (ping/pong, concurrent consults).
+                    raw = await asyncio.to_thread(
+                        stt.transcribe_for_session, bytes(buffer), session_id=session.session_id
+                    )
                     if not any((seg.text or "").strip() for seg in raw.segments):
                         raise RuntimeError("no speech detected in audio")
                     for seg in raw.segments:
@@ -96,8 +101,11 @@ async def consultation_ws(websocket: WebSocket, store: SessionStore, settings: S
                              "text": seg.text, "span_id": seg.id, "confidence": seg.confidence}
                         )
 
+                    await websocket.send_json(
+                        {"type": "stage_update", "stage": "generating", "session_id": session.session_id}
+                    )
                     template = get_registry().get(session.template_id)
-                    result = run_pipeline(raw, template, settings=settings)
+                    result = await asyncio.to_thread(run_pipeline, raw, template, settings=settings)
 
                     session.raw_transcript = raw
                     session.clean_transcript = result.clean

@@ -43,14 +43,30 @@ class VertexGeminiLLM:
     def available(self) -> bool:
         return True
 
+    def _thinking_config(self):
+        """Cap/disable Gemini "thinking" to cut latency on deterministic structuring.
+
+        ``thinking_budget=0`` turns thinking off on Flash/Flash-Lite (Pro clamps to
+        its minimum). Returns ``None`` if the installed SDK predates ThinkingConfig,
+        so an older google-genai still works (the kwarg is simply omitted).
+        """
+        thinking_cls = getattr(self._types, "ThinkingConfig", None)
+        if thinking_cls is None:
+            return None
+        return thinking_cls(thinking_budget=self.settings.llm_thinking_budget)
+
     def _config(self, *, system: str | None, schema: type[BaseModel] | None):
-        return self._types.GenerateContentConfig(
+        kwargs = dict(
             temperature=self.settings.llm_temperature,
             max_output_tokens=self.settings.llm_max_output_tokens,
             system_instruction=system,
             response_mime_type="application/json" if schema else None,
             response_schema=schema,
         )
+        thinking = self._thinking_config()
+        if thinking is not None:
+            kwargs["thinking_config"] = thinking
+        return self._types.GenerateContentConfig(**kwargs)
 
     def generate_structured(self, prompt: str, schema: type[T], *, system: str | None = None) -> T:
         resp = self.client.models.generate_content(

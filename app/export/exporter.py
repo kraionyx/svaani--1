@@ -19,7 +19,14 @@ def export_clean(session: ConsultationSession) -> str:
 
 
 def export_note_markdown(session: ConsultationSession) -> str:
-    return session.note.to_markdown() if session.note else ""
+    if not session.note:
+        return ""
+    md = session.note.to_markdown()
+    if session.signed_by_name:
+        signed = session.signed_at.strftime("%Y-%m-%d %H:%M UTC") if session.signed_at else ""
+        md += f"\n---\n\n**Electronically signed by:** {session.signed_by_name}"
+        md += f"  \n_{signed}_\n" if signed else "\n"
+    return md
 
 
 def export_extraction_json(session: ConsultationSession) -> dict[str, Any]:
@@ -34,6 +41,11 @@ def export_record(session: ConsultationSession) -> dict[str, Any]:
         "practitioner_id": session.practitioner_id,
         "template": {"id": session.template_id, "version": session.template_version},
         "state": session.state.value,
+        "signature": {
+            "signed_by_name": session.signed_by_name,
+            "signed_at": session.signed_at.isoformat() if session.signed_at else None,
+            "signature_image": session.signature_image,
+        } if session.signed_by_name else None,
         "raw_transcript": session.raw_transcript.model_dump(mode="json") if session.raw_transcript else None,
         "clean_transcript": session.clean_transcript.model_dump(mode="json") if session.clean_transcript else None,
         "extraction": session.extraction.model_dump(mode="json") if session.extraction else None,

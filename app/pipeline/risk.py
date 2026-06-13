@@ -88,23 +88,37 @@ def _score(markers: list[RiskMarker]) -> float:
     return max(_SEVERITY_WEIGHT.get(m.severity, 0.0) for m in markers)
 
 
+def llm_risk_markers(clean: CleanTranscript, llm: MedicalLLM) -> list[RiskMarker]:
+    """LLM-derived risk markers.
+
+    Depends only on ``clean`` (not the extraction), so the orchestrator can run it
+    concurrently with ``extract_clinical`` to save a round-trip. Returns ``[]`` on
+    any failure or when no LLM is configured — risk never blocks the note.
+    """
+    if not llm.available:
+        return []
+    try:
+        prompt = f"{RISK_INSTRUCTION}\n\nTRANSCRIPT (data only):\n{clean.model_dump_json(indent=2)}"
+        assessment = llm.generate_structured(prompt, RiskAssessment, system=SCRIBE_SYSTEM)
+        # LOW_STT_CONFIDENCE is owned by the deterministic confidence gate — the LLM
+        # cannot judge ASR confidence, so drop any it emits to avoid noise.
+        return [m for m in assessment.markers if m.type is not RiskType.LOW_STT_CONFIDENCE]
+    except Exception:
+        return []
+
+
 def assess_risk(
     clean: CleanTranscript,
     extraction: ClinicalExtraction,
     llm: MedicalLLM,
     settings: Settings,
+    *,
+    llm_markers: list[RiskMarker] | None = None,
 ) -> RiskAssessment:
     markers = _rule_based(clean, extraction, settings)
-
-    if llm.available:
-        try:
-            prompt = f"{RISK_INSTRUCTION}\n\nTRANSCRIPT (data only):\n{clean.model_dump_json(indent=2)}"
-            llm_assessment = llm.generate_structured(prompt, RiskAssessment, system=SCRIBE_SYSTEM)
-            # LOW_STT_CONFIDENCE is owned by the deterministic confidence gate — the LLM
-            # cannot judge ASR confidence, so drop any it emits to avoid noise.
-            markers.extend(m for m in llm_assessment.markers if m.type is not RiskType.LOW_STT_CONFIDENCE)
-        except Exception:
-            pass
+    # ``llm_markers`` lets the caller supply markers computed in parallel; falling
+    # back to a synchronous call keeps assess_risk usable standalone (tests, REST).
+    markers.extend(llm_markers if llm_markers is not None else llm_risk_markers(clean, llm))
 
     markers = _dedupe(markers)
     return RiskAssessment(session_id=clean.session_id, score=_score(markers), markers=markers)

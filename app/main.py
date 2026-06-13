@@ -6,12 +6,15 @@ PHI-touching action is permission-checked and audited.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Response, UploadFile, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -30,9 +33,20 @@ from app.store import get_store
 from app.templates.registry import get_registry
 from pydantic import BaseModel
 
-app = FastAPI(title="Karaionyx AI Medical Scribe", version="0.1.0")
+app = FastAPI(title="Svaani AI Medical Scribe", version="0.1.0")
 
-logger = logging.getLogger("karaionyx.audio")
+# The frontend is a standalone static app served on its own port (default :5173),
+# so cross-origin XHR/fetch and the custom auth headers must be allowed. Origins are
+# configurable via SCRIBE_CORS_ALLOW_ORIGINS.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_settings().cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+logger = logging.getLogger("svaani.audio")
 
 # Minimum uploaded-audio size; anything smaller is effectively a silent/empty
 # recording (a bare 16k mono WAV header is ~44 bytes).
@@ -43,12 +57,15 @@ def _has_speech(raw: RawTranscript) -> bool:
     """True if the transcript carries any non-empty utterance text."""
     return any((seg.text or "").strip() for seg in raw.segments)
 
-# ── Dashboard (single-page UI served by the API) ─────────────────────────────
-_STATIC_DIR = Path(__file__).parent / "static"
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+# The canonical frontend now lives in project_root/web and is meant to run on its
+# own port (e.g. `python -m http.server 5173 -d web`). We also mount it here so the
+# bundled same-origin UI at /ui keeps working without the second process.
+_WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 # Where the registry loads seed templates from (project_root/docs/templates).
 _TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "docs" / "templates"
-if _STATIC_DIR.exists():
-    app.mount("/ui", StaticFiles(directory=str(_STATIC_DIR), html=True), name="ui")
+if _WEB_DIR.exists():
+    app.mount("/ui", StaticFiles(directory=str(_WEB_DIR), html=True), name="ui")
 
 
 @app.get("/", include_in_schema=False)
@@ -83,6 +100,19 @@ class CreateSessionRequest(BaseModel):
 
 class StateRequest(BaseModel):
     state: ReviewState
+    # Sign-off, supplied only when transitioning to FINALIZED. A signing clinician
+    # name is required; the image (drawn pad or upload) is an optional data-URL.
+    signed_by_name: str | None = None
+    signature_image: str | None = None
+
+
+class NoteSectionEdit(BaseModel):
+    section_id: str
+    content_text: str
+
+
+class NoteEditRequest(BaseModel):
+    sections: list[NoteSectionEdit]
 
 
 # ── Health & templates ───────────────────────────────────────────────────────
@@ -229,7 +259,10 @@ async def upload_audio(sid: str, file: UploadFile = File(...), principal: Princi
     if len(audio) < _MIN_AUDIO_BYTES:
         raise HTTPException(status_code=422, detail="no audible speech captured")
     try:
-        raw = get_stt(get_settings()).transcribe_for_session(audio, session_id=sid)
+        # STT is a blocking SDK call — run it off the event loop.
+        raw = await asyncio.to_thread(
+            get_stt(get_settings()).transcribe_for_session, audio, session_id=sid
+        )
     except Exception as exc:  # surface STT provider errors instead of a raw 500
         logger.exception("STT failed for session %s", sid)
         raise HTTPException(status_code=502, detail=f"transcription failed: {str(exc)[:400]}") from exc
@@ -240,7 +273,7 @@ async def upload_audio(sid: str, file: UploadFile = File(...), principal: Princi
     if not _has_speech(raw):
         raise HTTPException(status_code=422, detail="no speech detected in audio")
     try:
-        return _process(session, raw, principal)
+        return await asyncio.to_thread(_process, session, raw, principal)
     except Exception as exc:
         logger.exception("pipeline failed for session %s", sid)
         raise HTTPException(status_code=500, detail=f"processing failed: {str(exc)[:400]}") from exc
@@ -258,6 +291,8 @@ def get_session(sid: str, principal: Principal = Depends(get_principal)) -> dict
         "template": {"id": s.template_id, "version": s.template_version},
         "has_outputs": s.note is not None,
         "risk_score": s.risk.score if s.risk else None,
+        "signed_by_name": s.signed_by_name,
+        "signed_at": s.signed_at.isoformat() if s.signed_at else None,
     }
 
 
@@ -284,6 +319,47 @@ def get_output(sid: str, kind: str, principal: Principal = Depends(get_principal
     return obj.model_dump(mode="json")
 
 
+@app.post("/sessions/{sid}/note")
+def edit_note(sid: str, req: NoteEditRequest, principal: Principal = Depends(get_principal)) -> dict:
+    """Save doctor edits to the generated note, then move the session to EDITED.
+
+    Edits only the human-readable ``content_text`` of the named sections; the
+    structured extraction and its provenance are left intact. Requires EDIT_NOTE.
+    """
+    _check(principal, Permission.EDIT_NOTE)
+    store = get_store()
+    if not store.exists(sid):
+        raise HTTPException(status_code=404, detail="unknown session")
+    session = store.get(sid)
+    if session.note is None:
+        raise HTTPException(status_code=409, detail="no note to edit yet")
+
+    edits = {e.section_id: e.content_text for e in req.sections}
+    known = {s.section_id for s in session.note.sections}
+    unknown = set(edits) - known
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown section(s): {', '.join(sorted(unknown))}")
+    for section in session.note.sections:
+        if section.section_id in edits:
+            section.content_text = edits[section.section_id]
+            section.empty = not section.content_text.strip()
+
+    # Reflect the human change in the review state: draft → in_review → edited.
+    try:
+        if session.state is ReviewState.DRAFT:
+            session.transition(ReviewState.IN_REVIEW)
+        if session.state is ReviewState.IN_REVIEW:
+            session.transition(ReviewState.EDITED)
+    except IllegalTransition:
+        pass  # already past the editable phase (e.g. approved) — content still saved
+
+    get_audit_log().record(AuditEvent(
+        actor_id=principal.id, action="edit_note", resource="note",
+        session_id=sid, phi_accessed=True, detail=",".join(sorted(edits)),
+    ))
+    return {"session_id": sid, "state": session.state.value, "note": session.note.model_dump(mode="json")}
+
+
 @app.post("/sessions/{sid}/state")
 def transition_state(sid: str, req: StateRequest, principal: Principal = Depends(get_principal)) -> dict:
     store = get_store()
@@ -294,10 +370,16 @@ def transition_state(sid: str, req: StateRequest, principal: Principal = Depends
         Permission.APPROVE_NOTE if req.state is ReviewState.APPROVED else Permission.EDIT_NOTE
     )
     _check(principal, perm)
+    if req.state is ReviewState.FINALIZED and not (req.signed_by_name or "").strip():
+        raise HTTPException(status_code=422, detail="a signing clinician name is required to finalize")
     try:
         session.transition(req.state)
     except IllegalTransition as e:
         raise HTTPException(status_code=409, detail=str(e))
+    if req.state is ReviewState.FINALIZED:
+        session.signed_by_name = req.signed_by_name.strip()
+        session.signature_image = req.signature_image
+        session.signed_at = datetime.now(timezone.utc)
     get_audit_log().record(AuditEvent(
         actor_id=principal.id, action="transition", resource="session",
         session_id=sid, detail=req.state.value,
@@ -325,7 +407,12 @@ def export_session(sid: str, fmt: str, principal: Principal = Depends(get_princi
     if fmt == "pdf":
         if session.note is None:
             raise HTTPException(status_code=409, detail="no note to export")
-        pdf = note_to_pdf(session.note)
+        pdf = note_to_pdf(
+            session.note,
+            signed_by_name=session.signed_by_name,
+            signed_at=session.signed_at,
+            signature_image=session.signature_image,
+        )
         return Response(
             content=pdf, media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{sid}.pdf"'},

@@ -33,6 +33,29 @@ def _is_empty(value: Any) -> bool:
     return value is None or value == [] or value == {} or value == ""
 
 
+def _humanize_finding(finding: str, value: Any) -> str:
+    """Render one examination finding as readable text, avoiding 'clear: clear'.
+
+    Deterministic fallback only — when an LLM is configured the note is re-narrated
+    into prose (see ``app.pipeline.narrate``). Examples:
+      ('granular_ppw', True)            -> 'granular ppw'
+      ('rashes', 'no rashes')           -> 'no rashes'
+      ('tonsillar_hypertrophy', 'Grade 2') -> 'tonsillar hypertrophy (Grade 2)'
+      ('clear', 'clear')                -> 'clear'
+    """
+    label = finding.replace("_", " ").strip()
+    if value is True:
+        return label
+    if value is False:
+        return f"no {label}"
+    sval = str(value).strip()
+    if not sval:
+        return label
+    if sval.lower() == label.lower() or label.lower() in sval.lower():
+        return sval
+    return f"{label} ({sval})"
+
+
 def _format_value(component: ComponentType, value: Any) -> str:
     if _is_empty(value):
         return ""
@@ -52,11 +75,11 @@ def _format_value(component: ComponentType, value: Any) -> str:
     if component is ComponentType.EXAMINATION and isinstance(value, dict):
         out = []
         for region, findings in value.items():
-            out.append(f"- {region.title()}:")
             if isinstance(findings, dict):
-                out.extend(f"    - {k.replace('_', ' ')}: {v}" for k, v in findings.items())
+                items = [_humanize_finding(k, v) for k, v in findings.items()]
+                out.append(f"- {region.title()}: " + ", ".join(items) + ".")
             else:
-                out.append(f"    - {findings}")
+                out.append(f"- {region.title()}: {findings}.")
         return "\n".join(out)
     if isinstance(value, list):
         return "\n".join(f"- {v}" for v in value)

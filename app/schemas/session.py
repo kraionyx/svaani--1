@@ -54,6 +54,12 @@ class ConsultationSession(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    # Digital sign-off (captured at FINALIZE). ``signature_image`` is an optional
+    # data-URL (drawn pad or uploaded image); the signing clinician's name is required.
+    signed_by_name: str | None = None
+    signature_image: str | None = None
+    signed_at: datetime | None = None
+
     # Outputs (populated as the pipeline runs).
     raw_transcript: RawTranscript | None = None
     clean_transcript: CleanTranscript | None = None

@@ -61,9 +61,19 @@ def test_existing_template_id_bumps_version(monkeypatch, tmp_path):
     assert second.json()["version"] == 2
 
 
-def test_non_admin_forbidden(monkeypatch, tmp_path):
+def test_doctor_can_manage_templates(monkeypatch, tmp_path):
+    # Clinicians author their own templates without switching to admin.
+    monkeypatch.setattr("app.main._TEMPLATES_DIR", tmp_path)
+    sections = [{"id": "cc", "component": "CHIEF_COMPLAINTS", "label": "CC", "order": 1}]
+    r = client.post("/templates", json=_template("doctpl", sections),
+                    headers={"X-User-Id": "doc", "X-Role": "doctor"})
+    assert r.status_code == 200, r.text
+
+
+def test_role_without_manage_templates_forbidden(monkeypatch, tmp_path):
+    # A role that genuinely lacks MANAGE_TEMPLATES (scribe) is still rejected.
     monkeypatch.setattr("app.main._TEMPLATES_DIR", tmp_path)
     sections = [{"id": "cc", "component": "CHIEF_COMPLAINTS", "label": "CC", "order": 1}]
     r = client.post("/templates", json=_template("nope", sections),
-                    headers={"X-User-Id": "doc", "X-Role": "doctor"})
+                    headers={"X-User-Id": "scr", "X-Role": "scribe"})
     assert r.status_code == 403
