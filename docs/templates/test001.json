@@ -1,0 +1,33 @@
+{
+  "template_id": "test001",
+  "name": "test001",
+  "version": 1,
+  "hospital_id": "apollo",
+  "description": null,
+  "sections": [
+    {
+      "id": "patient_information",
+      "component": "PATIENT_INFORMATION",
+      "label": "PATIENT INFORMATION",
+      "enabled": true,
+      "order": 1,
+      "schema_hint": null
+    },
+    {
+      "id": "chief_complaints",
+      "component": "CHIEF_COMPLAINTS",
+      "label": "CHIEF COMPLAINTS",
+      "enabled": true,
+      "order": 2,
+      "schema_hint": null
+    },
+    {
+      "id": "history_of_present_illness",
+      "component": "HISTORY_OF_PRESENT_ILLNESS",
+      "label": "HISTORY OF PRESENT ILLNESS",
+      "enabled": true,
+      "order": 3,
+      "schema_hint": null
+    }
+  ]
+}

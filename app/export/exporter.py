@@ -7,7 +7,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.export.fhir import note_to_fhir_bundle
 from app.schemas.session import ConsultationSession
+
+
+def export_fhir(session: ConsultationSession) -> dict[str, Any]:
+    """FHIR R4 document Bundle for EHR interoperability."""
+    return note_to_fhir_bundle(session)
 
 
 def export_raw(session: ConsultationSession) -> str:

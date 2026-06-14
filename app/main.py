@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import uuid
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,9 +23,16 @@ from app.audio.ws import consultation_ws
 from app.config import get_settings
 from app.export import exporter
 from app.export.pdf import note_to_pdf
-from app.pipeline.orchestrator import run_pipeline
+from app.observability import setup_observability
+from app.llm.base import get_llm
+from app.pipeline.coding import suggest_icd10
+from app.pipeline.orchestrator import rebuild_from_extraction, run_pipeline
+from app.pipeline.risk import aggregate_score
 from app.security.audit import AuditEvent, get_audit_log
+from app.security.auth import AuthError, principal_from
 from app.security.rbac import AccessDenied, Permission, Principal, Role, require_permission
+from app.schemas.clinical import ClinicalExtraction
+from app.schemas.risk import RiskAssessment, RiskMarker
 from app.schemas.session import ConsultationSession, IllegalTransition, ReviewState
 from app.schemas.template import TemplateDefinition
 from app.schemas.transcript import RawTranscript
@@ -32,6 +40,10 @@ from app.stt.sarvam import MockSarvamSTT, get_stt
 from app.store import get_store
 from app.templates.registry import get_registry
 from pydantic import BaseModel
+
+# The sarvamai streaming SDK calls pydantic v2 models' deprecated `.dict()` internally
+# (we never do). Silence that one third-party deprecation so live server logs stay clean.
+warnings.filterwarnings("ignore", message=r"The `dict` method is deprecated", category=DeprecationWarning)
 
 app = FastAPI(title="Svaani AI Medical Scribe", version="0.1.0")
 
@@ -48,6 +60,9 @@ app.add_middleware(
 
 logger = logging.getLogger("svaani.audio")
 
+# Observability: request-id propagation, access logs, and Prometheus /metrics.
+setup_observability(app, get_settings())
+
 # Minimum uploaded-audio size; anything smaller is effectively a silent/empty
 # recording (a bare 16k mono WAV header is ~44 bytes).
 _MIN_AUDIO_BYTES = 1024
@@ -62,24 +77,35 @@ def _has_speech(raw: RawTranscript) -> bool:
 # own port (e.g. `python -m http.server 5173 -d web`). We also mount it here so the
 # bundled same-origin UI at /ui keeps working without the second process.
 _WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+# The new Vite/React streaming SPA (built to web-app/dist). Served at /app; becomes the
+# default in the Phase 6 cutover. The legacy static UI stays at /ui until then.
+_WEBAPP_DIR = Path(__file__).resolve().parents[1] / "web-app" / "dist"
 # Where the registry loads seed templates from (project_root/docs/templates).
 _TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "docs" / "templates"
 if _WEB_DIR.exists():
     app.mount("/ui", StaticFiles(directory=str(_WEB_DIR), html=True), name="ui")
+if _WEBAPP_DIR.exists():
+    app.mount("/app", StaticFiles(directory=str(_WEBAPP_DIR), html=True), name="app")
 
 
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
-    return RedirectResponse("/ui/")
+    # Prefer the new streaming SPA when it has been built; else the legacy UI.
+    return RedirectResponse("/app/" if _WEBAPP_DIR.exists() else "/ui/")
 
 
 # ── Auth (scaffold) ──────────────────────────────────────────────────────────
 def get_principal(
+    authorization: str | None = Header(default=None),
     x_user_id: str = Header(default="dev-doctor"),
     x_role: str = Header(default="doctor"),
 ) -> Principal:
     try:
-        return Principal(id=x_user_id, role=Role(x_role))
+        return principal_from(
+            get_settings(), authorization=authorization, x_user_id=x_user_id, x_role=x_role
+        )
+    except AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e))
     except ValueError:
         raise HTTPException(status_code=400, detail=f"unknown role '{x_role}'")
 
@@ -113,6 +139,25 @@ class NoteSectionEdit(BaseModel):
 
 class NoteEditRequest(BaseModel):
     sections: list[NoteSectionEdit]
+
+
+class ExtractionEditRequest(BaseModel):
+    extraction: ClinicalExtraction
+
+
+class RiskEditRequest(BaseModel):
+    markers: list[RiskMarker]
+
+
+def _advance_to_edited(session: ConsultationSession) -> None:
+    """Reflect a human change in the review state: draft → in_review → edited."""
+    try:
+        if session.state is ReviewState.DRAFT:
+            session.transition(ReviewState.IN_REVIEW)
+        if session.state is ReviewState.IN_REVIEW:
+            session.transition(ReviewState.EDITED)
+    except IllegalTransition:
+        pass  # already past the editable phase (e.g. approved) — content still saved
 
 
 # ── Health & templates ───────────────────────────────────────────────────────
@@ -211,6 +256,7 @@ def _process(session: ConsultationSession, raw: RawTranscript, principal: Princi
     get_store().set_result(session.session_id, result)
     if session.state is ReviewState.PROCESSING:
         session.transition(ReviewState.DRAFT)
+    get_store().persist(session)
     get_audit_log().record(AuditEvent(
         actor_id=principal.id, action="process_pipeline", resource="session",
         session_id=session.session_id, phi_accessed=True,
@@ -319,6 +365,24 @@ def get_output(sid: str, kind: str, principal: Principal = Depends(get_principal
     return obj.model_dump(mode="json")
 
 
+@app.get("/sessions/{sid}/coding")
+def get_coding_hints(sid: str, principal: Principal = Depends(get_principal)) -> dict:
+    """On-demand, NON-AUTHORITATIVE ICD-10 hints for the session's documented diagnoses.
+
+    Computed lazily (kept off the consult latency path); empty without an LLM. Each hint
+    is grounded to the diagnosis it codes — the scribe never invents a diagnosis.
+    """
+    _check(principal, Permission.VIEW_TRANSCRIPT)
+    store = get_store()
+    if not store.exists(sid):
+        raise HTTPException(status_code=404, detail="unknown session")
+    session = store.get(sid)
+    if session.extraction is None:
+        raise HTTPException(status_code=409, detail="no extraction yet")
+    hints = suggest_icd10(session.extraction, get_llm(get_settings()))
+    return hints.model_dump(mode="json")
+
+
 @app.post("/sessions/{sid}/note")
 def edit_note(sid: str, req: NoteEditRequest, principal: Principal = Depends(get_principal)) -> dict:
     """Save doctor edits to the generated note, then move the session to EDITED.
@@ -344,20 +408,80 @@ def edit_note(sid: str, req: NoteEditRequest, principal: Principal = Depends(get
             section.content_text = edits[section.section_id]
             section.empty = not section.content_text.strip()
 
-    # Reflect the human change in the review state: draft → in_review → edited.
-    try:
-        if session.state is ReviewState.DRAFT:
-            session.transition(ReviewState.IN_REVIEW)
-        if session.state is ReviewState.IN_REVIEW:
-            session.transition(ReviewState.EDITED)
-    except IllegalTransition:
-        pass  # already past the editable phase (e.g. approved) — content still saved
-
+    _advance_to_edited(session)
+    store.persist(session)
     get_audit_log().record(AuditEvent(
         actor_id=principal.id, action="edit_note", resource="note",
         session_id=sid, phi_accessed=True, detail=",".join(sorted(edits)),
     ))
     return {"session_id": sid, "state": session.state.value, "note": session.note.model_dump(mode="json")}
+
+
+@app.put("/sessions/{sid}/extraction")
+def edit_extraction(sid: str, req: ExtractionEditRequest, principal: Principal = Depends(get_principal)) -> dict:
+    """Save doctor edits to the clinical extraction, then re-derive the note + grounding.
+
+    The doctor is the clinical authority: edited/added items are kept (grounded in flag
+    mode), the note is re-rendered deterministically from the edited extraction, and
+    fact verification re-runs so any value not matching the transcript is still surfaced.
+    Requires EDIT_NOTE.
+    """
+    _check(principal, Permission.EDIT_NOTE)
+    store = get_store()
+    if not store.exists(sid):
+        raise HTTPException(status_code=404, detail="unknown session")
+    session = store.get(sid)
+    if session.extraction is None:
+        raise HTTPException(status_code=409, detail="no extraction to edit yet")
+
+    extraction = req.extraction
+    extraction.session_id = sid
+    template = get_registry().get(session.template_id)
+    result = rebuild_from_extraction(
+        extraction, template, session.clean_transcript,
+        session.risk or RiskAssessment(session_id=sid), get_settings(),
+    )
+    session.extraction = result.extraction
+    session.note = result.note
+    store.set_result(sid, result)
+    _advance_to_edited(session)
+    store.persist(session)
+    get_audit_log().record(AuditEvent(
+        actor_id=principal.id, action="edit_extraction", resource="extraction",
+        session_id=sid, phi_accessed=True,
+    ))
+    return {
+        "session_id": sid, "state": session.state.value,
+        "extraction": result.extraction.model_dump(mode="json"),
+        "note": result.note.model_dump(mode="json"),
+        "grounding": result.grounding.model_dump(mode="json"),
+    }
+
+
+@app.put("/sessions/{sid}/risk")
+def edit_risk(sid: str, req: RiskEditRequest, principal: Principal = Depends(get_principal)) -> dict:
+    """Save doctor edits to the risk markers (add / remove / edit). Re-scores from the
+    edited markers. Risk is a non-authoritative attention aid, so this never changes the
+    note or extraction. Requires EDIT_NOTE.
+    """
+    _check(principal, Permission.EDIT_NOTE)
+    store = get_store()
+    if not store.exists(sid):
+        raise HTTPException(status_code=404, detail="unknown session")
+    session = store.get(sid)
+    if session.risk is None:
+        raise HTTPException(status_code=409, detail="no risk assessment to edit yet")
+
+    session.risk = RiskAssessment(
+        session_id=sid, markers=req.markers, score=aggregate_score(req.markers),
+    )
+    _advance_to_edited(session)
+    store.persist(session)
+    get_audit_log().record(AuditEvent(
+        actor_id=principal.id, action="edit_risk", resource="risk",
+        session_id=sid, phi_accessed=True,
+    ))
+    return {"session_id": sid, "state": session.state.value, "risk": session.risk.model_dump(mode="json")}
 
 
 @app.post("/sessions/{sid}/state")
@@ -380,6 +504,7 @@ def transition_state(sid: str, req: StateRequest, principal: Principal = Depends
         session.signed_by_name = req.signed_by_name.strip()
         session.signature_image = req.signature_image
         session.signed_at = datetime.now(timezone.utc)
+    store.persist(session)
     get_audit_log().record(AuditEvent(
         actor_id=principal.id, action="transition", resource="session",
         session_id=sid, detail=req.state.value,
@@ -402,6 +527,8 @@ def export_session(sid: str, fmt: str, principal: Principal = Depends(get_princi
     ))
     if fmt == "json":
         return exporter.export_record(session)
+    if fmt == "fhir":
+        return exporter.export_fhir(session)
     if fmt == "markdown":
         return Response(content=exporter.export_note_markdown(session), media_type="text/markdown")
     if fmt == "pdf":

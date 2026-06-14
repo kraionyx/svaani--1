@@ -1,0 +1,20 @@
+# Svaani — single-container deploy (API + built SPA). Sessions persist to a SQLite
+# volume; bring credentials/keys via .env (never bake secrets into the image).
+services:
+  svaani:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      SCRIBE_STORE_BACKEND: sqlite
+      SCRIBE_SQLITE_PATH: /data/svaani.db
+      SCRIBE_ENABLE_METRICS: "true"
+      # SCRIBE_AUTH_MODE: jwt        # enable to require bearer tokens
+    volumes:
+      - svaani-data:/data
+    restart: unless-stopped
+
+volumes:
+  svaani-data:

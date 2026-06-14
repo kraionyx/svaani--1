@@ -16,7 +16,9 @@ const API_BASE = (() => {
 })();
 
 let SESSION = null, STATE = null, LASTPROC = null, LASTRAW = null, LASTNOTE = null;
-let editing = false;
+let LASTEXTR = null, LASTRISK = null;
+let editing = false, editingExtr = false, editingRisk = false;
+let EXTR_EDIT = null, RISK_EDIT = null, VITALS_EDIT = null;
 
 function headers(extra = {}) {
   return Object.assign({ 'X-User-Id': 'dashboard', 'X-Role': $('#role').value }, extra);
@@ -77,14 +79,14 @@ function busy(on) { enableCapture(!on); $('#btnNew').disabled = on; }
 async function newSession() {
   const tpl = $('#template').value;
   const r = await api('/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ template_id: tpl }) });
-  SESSION = r.session_id; LASTPROC = null; LASTNOTE = null; editing = false;
+  SESSION = r.session_id; LASTPROC = null; LASTNOTE = null; editing = editingExtr = editingRisk = false;
   $('#sessId').textContent = SESSION; setState(r.state); enableCapture(true);
   $('#empty').style.display = 'none'; $('#work').style.display = 'none';
   toast('Session started · ' + SESSION);
 }
 
 async function afterProcess(resp) {
-  LASTPROC = resp; setState(resp.state); editing = false;
+  LASTPROC = resp; setState(resp.state); editing = editingExtr = editingRisk = false;
   $('#empty').style.display = 'none'; $('#work').style.display = 'block';
   await renderAll(); showTab('note');
   const segs = (LASTRAW && LASTRAW.segments || []).length;
@@ -154,28 +156,183 @@ async function saveEdits() {
     editing = false; setState(r.state); renderNote(r.note); toast('Note saved · ' + r.state.replace('_', ' '));
   } catch (e) { toast('save failed: ' + e.message, true); }
 }
+const RISK_TYPES = ['red_flag_symptom', 'allergy_mentioned', 'medication_mentioned', 'dosage_mentioned', 'abnormal_vital', 'low_stt_confidence', 'other'];
+const RISK_SEVS = ['info', 'low', 'moderate', 'high', 'critical'];
+
 function renderRisk(r) {
   if (!r) { $('#tab-risk').innerHTML = '<div class="card muted">No risk assessment.</div>'; return; }
+  LASTRISK = r;
+  const editable = ['draft', 'in_review', 'edited'].includes(STATE);
+  if (editingRisk) { renderRiskEditor(); return; }
   const pct = Math.round((r.score || 0) * 100);
   const mk = (r.markers || []).map(m => `<div class="marker"><span class="sev ${m.severity}">${m.severity}</span>
     <div><b>${esc(m.type.replace(/_/g, ' '))}</b><div>${esc(m.message)}</div>
+    ${m.evidence_text ? `<blockquote class="evidence">“${esc(m.evidence_text)}”</blockquote>` : ''}
     <div class="kv">evidence: ${(m.evidence_span_ids || []).join(', ') || '—'} · non-authoritative</div></div></div>`).join('')
     || '<p class="muted">No risk markers.</p>';
+  const bar = !editable ? '' : `<div class="editbar"><button class="btn ghost sm" id="btnEditRisk">✎ Edit risk markers</button>
+    <span class="kv">Add, edit, or remove attention markers.</span></div>`;
   $('#tab-risk').innerHTML = `<div class="card"><h2 style="margin-top:0">Risk markers · attention score ${pct}%</h2>
-    <div class="gauge"><div style="width:${pct}%"></div></div>${mk}
+    <div class="gauge"><div style="width:${pct}%"></div></div>${bar}${mk}
     <div class="disclaimer">${esc(r.disclaimer)}</div></div>`;
+  if (editable) $('#btnEditRisk').onclick = () => { RISK_EDIT = JSON.parse(JSON.stringify(LASTRISK.markers || [])); editingRisk = true; renderRisk(LASTRISK); };
 }
+
+function renderRiskEditor() {
+  const sel = (val, opts) => opts.map(o => `<option value="${o}" ${o === val ? 'selected' : ''}>${o}</option>`).join('');
+  const rows = RISK_EDIT.map((m, i) => `<div class="marker edit" data-i="${i}">
+    <select data-k="severity">${sel(m.severity, RISK_SEVS)}</select>
+    <div style="flex:1">
+      <select data-k="type" style="margin-bottom:6px">${sel(m.type, RISK_TYPES)}</select>
+      <input type="text" data-k="message" value="${esc(m.message)}" placeholder="marker message"/>
+      <input type="text" data-k="evidence_text" value="${esc(m.evidence_text || '')}" placeholder="quoted evidence (optional)" style="margin-top:6px"/>
+      <div class="kv">evidence spans: ${(m.evidence_span_ids || []).join(', ') || '—'}</div>
+    </div>
+    <button class="x rm" title="remove">✕</button></div>`).join('') || '<p class="muted">No markers — add one below.</p>';
+  $('#tab-risk').innerHTML = `<div class="card"><h2 style="margin-top:0">Edit risk markers</h2>
+    <div class="editbar"><button class="btn sm" id="btnSaveRisk">Save changes</button>
+      <button class="btn ghost sm" id="btnCancelRisk">Cancel</button>
+      <button class="btn ghost sm" id="btnAddRisk">+ add marker</button></div>
+    ${rows}<div class="disclaimer">${esc(LASTRISK.disclaimer)}</div></div>`;
+  $$('#tab-risk .marker.edit').forEach(el => {
+    const m = RISK_EDIT[+el.dataset.i];
+    el.querySelectorAll('[data-k]').forEach(inp => inp.addEventListener('input', e => m[e.target.dataset.k] = e.target.value));
+    el.querySelector('.rm').onclick = () => { RISK_EDIT.splice(+el.dataset.i, 1); renderRiskEditor(); };
+  });
+  $('#btnAddRisk').onclick = () => { RISK_EDIT.push({ type: 'other', severity: 'info', message: '', evidence_text: '', evidence_span_ids: [] }); renderRiskEditor(); };
+  $('#btnSaveRisk').onclick = saveRisk;
+  $('#btnCancelRisk').onclick = () => { editingRisk = false; renderRisk(LASTRISK); };
+}
+
+async function saveRisk() {
+  const markers = RISK_EDIT
+    .map(m => ({ type: m.type, severity: m.severity, message: (m.message || '').trim(), evidence_text: m.evidence_text || '', evidence_span_ids: m.evidence_span_ids || [] }))
+    .filter(m => m.message);
+  try {
+    const r = await api(`/sessions/${SESSION}/risk`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ markers }) });
+    editingRisk = false; setState(r.state); renderRisk(r.risk);
+    toast('Risk markers saved · ' + r.state.replace('_', ' '));
+  } catch (e) { toast('save failed: ' + e.message, true); }
+}
+// Object-list fields: [key, label, [[col,header],...], makeEmptyRow].
+const EXTR_OBJROWS = [
+  ['chief_complaints', 'Chief complaints', [['symptom', 'Symptom'], ['duration', 'Duration'], ['type', 'Type']], () => ({ symptom: '', duration: '', type: '', provenance: { span_ids: [] } })],
+  ['allergies', 'Allergies', [['substance', 'Substance'], ['reaction', 'Reaction']], () => ({ substance: '', reaction: '', provenance: { span_ids: [] } })],
+  ['examination', 'Examination', [['region', 'Region'], ['finding', 'Finding'], ['value', 'Value']], () => ({ region: '', finding: '', value: '', provenance: { span_ids: [] } })],
+  ['medications_discussed', 'Medications discussed', [['name', 'Drug'], ['dose', 'Dose'], ['route', 'Route'], ['frequency', 'Frequency'], ['duration', 'Duration']], () => ({ name: '', dose: '', route: '', frequency: '', duration: '', verbatim_text: '', provenance: { span_ids: [] } })],
+];
+// Free-text list fields (one item per line) and scalar free-text fields.
+const EXTR_TEXTLISTS = [['past_medical_history', 'Past medical history'], ['family_history', 'Family history'], ['investigations', 'Investigations'], ['diagnosis', 'Diagnosis'], ['treatment_plan', 'Treatment plan']];
+const EXTR_SCALARS = [['history_of_present_illness', 'History of present illness'], ['assessment', 'Assessment'], ['follow_up', 'Follow-up'], ['doctor_notes', 'Doctor notes']];
+
 function renderExtraction(e) {
   if (!e) { $('#tab-extraction').innerHTML = '<div class="card muted">No extraction.</div>'; return; }
+  LASTEXTR = e;
+  const editable = ['draft', 'in_review', 'edited'].includes(STATE);
+  if (editingExtr) { renderExtractionEditor(); return; }
+  const mism = new Set(((LASTPROC && LASTPROC.grounding && LASTPROC.grounding.mismatched) || []).map(s => s.split('—')[0].trim()));
   const cc = (e.chief_complaints || []).map(c => `<li>${esc(c.symptom)}${c.duration ? ` <span class="kv">(${esc(c.duration)})</span>` : ''}${c.type ? ` <span class="kv">[${esc(c.type)}]</span>` : ''}</li>`).join('');
+  const alg = (e.allergies || []).map(a => `<li>${esc(a.substance)}${a.reaction ? ` — ${esc(a.reaction)}` : ''}</li>`).join('');
   const exByRegion = {}; (e.examination || []).forEach(f => { (exByRegion[f.region] = exByRegion[f.region] || []).push(`${f.finding}: ${esc(f.value)}`); });
   const ex = Object.entries(exByRegion).map(([r, v]) => `<li><b>${esc(r)}</b>: ${v.map(esc).join(', ')}</li>`).join('');
-  const meds = (e.medications_discussed || []).map(m => `<li>${esc(m.name)} ${esc(m.dose || '')} ${esc(m.frequency || '')} <span class="sev moderate" style="font-size:9px">verify · non-authoritative</span></li>`).join('') || '<li class="muted">none discussed</li>';
-  $('#tab-extraction').innerHTML = `<div class="card"><h2 style="margin-top:0">Clinical extraction (grounded)</h2>
+  const vit = Object.entries(e.vitals || {}).map(([k, v]) => `<li><b>${esc(k)}</b>: ${esc(v)}</li>`).join('');
+  const meds = (e.medications_discussed || []).map(m => {
+    const flagged = mism.has(`medication:${m.name}${m.dose ? ' ' + m.dose : ''}`);
+    return `<li>${esc(m.name)} ${esc(m.dose || '')} ${esc(m.frequency || '')}
+      <span class="sev ${flagged ? 'high' : 'moderate'}" style="font-size:9px">${flagged ? '⚠ not in transcript' : 'verify'} · non-authoritative</span></li>`;
+  }).join('') || '<li class="muted">none discussed</li>';
+  const hpi = e.history_of_present_illness && e.history_of_present_illness.text;
+  const bar = !editable ? '' : `<div class="editbar"><button class="btn ghost sm" id="btnEditExtr">✎ Edit extraction</button>
+    <span class="kv">Edits re-render the note and re-check it against the transcript.</span></div>`;
+  $('#tab-extraction').innerHTML = `<div class="card"><h2 style="margin-top:0">Clinical extraction (grounded)</h2>${bar}
+    ${hpi ? `<p><b>History of present illness</b></p><p>${esc(hpi)}</p>` : ''}
     <p><b>Chief complaints</b></p><ul>${cc || '<li class="muted">none</li>'}</ul>
+    <p><b>Allergies</b></p><ul>${alg || '<li class="muted">none</li>'}</ul>
     <p><b>Examination</b></p><ul>${ex || '<li class="muted">none</li>'}</ul>
+    ${vit ? `<p><b>Vitals</b></p><ul>${vit}</ul>` : ''}
     <p><b>Medications discussed</b></p><ul>${meds}</ul>
     <details><summary class="muted">Raw extraction JSON</summary><pre>${esc(JSON.stringify(e, null, 2))}</pre></details></div>`;
+  if (editable) $('#btnEditExtr').onclick = () => {
+    EXTR_EDIT = JSON.parse(JSON.stringify(LASTEXTR));
+    VITALS_EDIT = Object.entries(EXTR_EDIT.vitals || {});
+    editingExtr = true; renderExtraction(LASTEXTR);
+  };
+}
+
+function renderExtractionEditor() {
+  const objTbl = (key, label, cols, arr) => {
+    const rows = (arr || []).map((o, i) => `<tr data-i="${i}">${cols.map(([k, h]) =>
+      `<td><input type="text" data-k="${k}" value="${esc(o[k] ?? '')}" placeholder="${esc(h)}"/></td>`).join('')}<td><button class="x rm" title="remove">✕</button></td></tr>`).join('');
+    return `<p><b>${esc(label)}</b></p><table class="edit-tbl" data-field="${key}"><thead><tr>${cols.map(([, h]) => `<th>${esc(h)}</th>`).join('')}<th></th></tr></thead><tbody>${rows}</tbody></table>
+      <button class="btn ghost sm add" data-field="${key}">+ add row</button>`;
+  };
+  const vitRows = (VITALS_EDIT || []).map(([k, v], i) => `<tr data-i="${i}">
+    <td><input type="text" data-vk value="${esc(k)}" placeholder="name"/></td>
+    <td><input type="text" data-vv value="${esc(v)}" placeholder="value"/></td>
+    <td><button class="x rmv" title="remove">✕</button></td></tr>`).join('');
+  const textlists = EXTR_TEXTLISTS.map(([k, label]) =>
+    `<p><b>${esc(label)}</b> <span class="kv">(one per line)</span></p>
+     <textarea data-field="${k}">${esc((EXTR_EDIT[k] || []).map(g => g.text).join('\n'))}</textarea>`).join('');
+  const scalars = EXTR_SCALARS.map(([k, label]) =>
+    `<p><b>${esc(label)}</b></p><textarea data-field="${k}">${esc((EXTR_EDIT[k] && EXTR_EDIT[k].text) || '')}</textarea>`).join('');
+
+  $('#tab-extraction').innerHTML = `<div class="card"><h2 style="margin-top:0">Edit clinical extraction</h2>
+    <div class="editbar"><button class="btn sm" id="btnSaveExtr">Save changes</button>
+      <button class="btn ghost sm" id="btnCancelExtr">Cancel</button>
+      <span class="kv">Saving re-renders the note and re-verifies values against the transcript.</span></div>
+    ${EXTR_OBJROWS.map(([k, label, cols]) => objTbl(k, label, cols, EXTR_EDIT[k])).join('')}
+    <p><b>Vitals</b></p><table class="edit-tbl" id="vitTbl"><thead><tr><th>Name</th><th>Value</th><th></th></tr></thead><tbody>${vitRows}</tbody></table>
+    <button class="btn ghost sm" id="addVit">+ add vital</button>
+    ${scalars}${textlists}</div>`;
+
+  $$('#tab-extraction .edit-tbl[data-field]').forEach(tbl => {
+    const field = tbl.dataset.field;
+    tbl.querySelectorAll('tbody tr').forEach(tr => {
+      const o = EXTR_EDIT[field][+tr.dataset.i];
+      tr.querySelectorAll('[data-k]').forEach(inp => inp.addEventListener('input', e => o[e.target.dataset.k] = e.target.value));
+      tr.querySelector('.rm').onclick = () => { EXTR_EDIT[field].splice(+tr.dataset.i, 1); renderExtractionEditor(); };
+    });
+  });
+  $$('#tab-extraction .add[data-field]').forEach(btn => btn.onclick = () => {
+    const cfg = EXTR_OBJROWS.find(c => c[0] === btn.dataset.field);
+    (EXTR_EDIT[btn.dataset.field] = EXTR_EDIT[btn.dataset.field] || []).push(cfg[3]());
+    renderExtractionEditor();
+  });
+  $$('#vitTbl tbody tr').forEach(tr => {
+    const i = +tr.dataset.i;
+    tr.querySelector('[data-vk]').addEventListener('input', e => VITALS_EDIT[i][0] = e.target.value);
+    tr.querySelector('[data-vv]').addEventListener('input', e => VITALS_EDIT[i][1] = e.target.value);
+    tr.querySelector('.rmv').onclick = () => { VITALS_EDIT.splice(i, 1); renderExtractionEditor(); };
+  });
+  $('#addVit').onclick = () => { VITALS_EDIT.push(['', '']); renderExtractionEditor(); };
+  $('#btnSaveExtr').onclick = saveExtraction;
+  $('#btnCancelExtr').onclick = () => { editingExtr = false; renderExtraction(LASTEXTR); };
+}
+
+async function saveExtraction() {
+  const ex = EXTR_EDIT;
+  // Vitals: rebuild dict from the key/value rows.
+  ex.vitals = {}; (VITALS_EDIT || []).forEach(([k, v]) => { if ((k || '').trim()) ex.vitals[k.trim()] = v; });
+  // Free-text lists: one GroundedText per non-empty line.
+  EXTR_TEXTLISTS.forEach(([k]) => {
+    const t = $(`#tab-extraction textarea[data-field="${k}"]`).value;
+    ex[k] = t.split('\n').map(s => s.trim()).filter(Boolean).map(text => ({ text, provenance: { span_ids: [] } }));
+  });
+  // Scalars: keep prior provenance when the field already existed.
+  EXTR_SCALARS.forEach(([k]) => {
+    const t = ($(`#tab-extraction textarea[data-field="${k}"]`).value || '').trim();
+    ex[k] = t ? { text: t, provenance: (LASTEXTR[k] && LASTEXTR[k].provenance) || { span_ids: [] } } : null;
+  });
+  // Drop blank object rows.
+  EXTR_OBJROWS.forEach(([k, , cols]) => { ex[k] = (ex[k] || []).filter(o => cols.some(([c]) => (o[c] ?? '').toString().trim())); });
+  try {
+    const r = await api(`/sessions/${SESSION}/extraction`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ extraction: ex }) });
+    editingExtr = false; setState(r.state);
+    LASTEXTR = r.extraction; LASTNOTE = r.note; if (LASTPROC) LASTPROC.grounding = r.grounding;
+    renderExtraction(r.extraction); renderNote(r.note); renderGrounding();
+    const nMis = (r.grounding.mismatched || []).length;
+    toast(`Extraction saved · note updated${nMis ? ` · ⚠ ${nMis} value(s) not in transcript` : ''} · ` + r.state.replace('_', ' '));
+  } catch (e) { toast('save failed: ' + e.message, true); }
 }
 function renderTranscript(raw, clean) {
   const lowset = new Set((clean && clean.low_confidence_span_ids) || []);
@@ -191,9 +348,16 @@ function renderTranscript(raw, clean) {
 function renderGrounding() {
   const g = LASTPROC && LASTPROC.grounding;
   if (!g) { $('#tab-grounding').innerHTML = '<div class="card muted">No grounding report.</div>'; return; }
-  const list = a => a && a.length ? ('<ul>' + a.map(x => `<li>${esc(x)}</li>`).join('') + '</ul>') : '<p class="muted">none</p>';
-  $('#tab-grounding').innerHTML = `<div class="card"><h2 style="margin-top:0">Grounding — “only what was said”</h2>
+  const list = (a, cls = '') => a && a.length
+    ? ('<ul' + (cls ? ` class="${cls}"` : '') + '>' + a.map(x => `<li>${esc(x)}</li>`).join('') + '</ul>')
+    : '<p class="muted">none</p>';
+  const nMis = (g.mismatched || []).length;
+  $('#tab-grounding').innerHTML = `<div class="card"><h2 style="margin-top:0">Grounding & fact verification — “only what was said”</h2>
     <p>Kept <b>${g.kept}</b> grounded items · dropped <b>${(g.dropped || []).length}</b> · flagged <b>${(g.flagged || []).length}</b>.</p>
+    ${nMis ? `<div class="disclaimer" style="border-color:#c0392b;color:#c0392b">
+      ⚠ ${nMis} extracted value(s) were NOT found in the transcript they cite — likely inferred or normalized, not heard. Verify before signing.</div>` : ''}
+    <p><b>Fact check — values not matching the transcript</b></p>${list(g.mismatched, 'mismatched')}
+    <p><b>Fact check — values confirmed in the transcript</b></p>${list(g.verified, 'verified')}
     <p><b>Dropped (ungrounded / not in transcript)</b></p>${list(g.dropped)}
     <p><b>Flagged</b></p>${list(g.flagged)}</div>`;
 }

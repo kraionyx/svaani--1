@@ -169,6 +169,19 @@ label.lbl { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 .sev.info { background: var(--info); } .sev.low { background: var(--low); } .sev.moderate { background: var(--moderate); }
 .sev.high { background: var(--high); } .sev.critical { background: var(--critical); }
 .disclaimer { font-size: 12px; color: var(--muted); border-left: 3px solid var(--moderate); padding: 8px 12px; margin-top: 12px; background: var(--surface-2); border-radius: 0 8px 8px 0; }
+.evidence { margin: 6px 0 2px; padding: 4px 10px; border-left: 3px solid var(--border); color: var(--ink); font-size: 12.5px; font-style: italic; background: var(--surface-3); border-radius: 0 6px 6px 0; }
+ul.mismatched li { color: var(--critical); } ul.verified li { color: var(--ok, var(--accent-strong)); }
+.edit-tbl { width: 100%; border-collapse: collapse; margin: 4px 0 6px; }
+.edit-tbl th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); padding: 2px 4px; }
+.edit-tbl td { padding: 2px 4px; vertical-align: top; }
+.edit-tbl input, .edit-tbl select { width: 100%; padding: 6px 8px; font-size: 12.5px; }
+.edit-tbl .x { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 4px 9px; border-radius: 6px; font-weight: 700; cursor: pointer; }
+.edit-tbl .x:hover { border-color: var(--critical); color: var(--critical); }
+.marker.edit select, .marker.edit input { width: 100%; padding: 6px 8px; font-size: 12.5px; }
+.marker.edit select[data-k=severity] { flex: 0 0 96px; width: 96px; }
+.marker.edit .x { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 4px 9px; border-radius: 6px; font-weight: 700; cursor: pointer; align-self: flex-start; }
+.marker.edit .x:hover { border-color: var(--critical); color: var(--critical); }
+#tab-extraction textarea { width: 100%; min-height: 56px; resize: vertical; line-height: 1.5; }
 
 /* ---------- Transcript ---------- */
 .seg { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border-soft); }

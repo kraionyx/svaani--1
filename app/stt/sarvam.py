@@ -17,6 +17,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from typing import Any
 
 from app.config import Settings, get_settings
@@ -105,20 +106,58 @@ class SarvamSTT:
             )
             job.upload_files([in_path])
             job.start()
-            job.wait_until_complete(
+            # wait_until_complete() returns the *final* JobStatusResponse. Use it
+            # directly: job.is_successful()/get_status() each fire a fresh status
+            # call, and Sarvam's status endpoint is eventually consistent, so a
+            # second poll can return a stale non-terminal state and spuriously fail
+            # a job that actually completed ("not successful: Completed").
+            status = job.wait_until_complete(
                 poll_interval=self.settings.sarvam_poll_interval_s,
                 timeout=self.settings.sarvam_batch_timeout_s,
             )
-            if not job.is_successful():
-                raise RuntimeError(f"Sarvam batch job not successful: {job.get_status().job_state}")
+            if status.job_state.lower() != "completed":
+                raise RuntimeError(f"Sarvam batch job not successful: {status.job_state}")
 
             # NOTE: get_file_results() returns only per-file status metadata — NOT the
             # transcript. The transcript lives in the job's output files, which must be
             # downloaded. download_outputs() writes one ``<input_filename>.json`` per file.
-            job.download_outputs(out_dir)
+            self._download_outputs_resilient(job, out_dir)
             return _parse_batch_output_dir(session_id, out_dir)
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def _download_outputs_resilient(self, job: Any, out_dir: str, *, attempts: int = 6, delay: float = 2.0) -> None:
+        """Download batch outputs, tolerating Sarvam's eventual consistency.
+
+        ``wait_until_complete()`` can report COMPLETED from the status service while the
+        download service still sees the job as Running/Pending and returns a transient
+        400 ("Job ... is not in COMPLETED state"). The job IS done — the endpoint just
+        hasn't caught up — so retry the download across that propagation window before
+        giving up (the WS path then falls back to the live streamed segments).
+        """
+        last_exc: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                job.download_outputs(out_dir)
+                return
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc)
+                transient = (
+                    "not in COMPLETED state" in msg
+                    or "Current state: Running" in msg
+                    or "Current state: Pending" in msg
+                    # Job is "completed" but the per-file detail hasn't propagated to
+                    # "Success" yet, so get_output_mappings() is empty → download_links is
+                    # called with no files. Same eventual-consistency lag; retry it.
+                    or "files list must not be empty" in msg
+                )
+                if not transient:
+                    raise
+                last_exc = exc
+                logger.info("Sarvam outputs not yet downloadable (attempt %d/%d); retrying in %.0fs",
+                            attempt, attempts, delay)
+                time.sleep(delay)
+        raise RuntimeError(f"Sarvam batch outputs never became downloadable after {attempts} tries: {last_exc}")
 
     # ── Dispatch + fallback ──────────────────────────────────────────────────
     def transcribe_for_session(self, audio: bytes, *, session_id: str, diarize: bool | None = None) -> RawTranscript:

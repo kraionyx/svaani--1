@@ -1,11 +1,23 @@
 # Secrets — never commit
 .env
+.env.*
 *.key
 
-# Audit / runtime artifacts
+# Audit / runtime artifacts (may contain PHI)
 audit.log.jsonl
 sarvam_*/
 *.pdf
+*.log
+*.db
+svaani.db
+
+# Node / frontend build
+node_modules/
+web-app/dist/
+*.tsbuildinfo
+
+# Local dev cruft
+Screenshot*.png
 
 # Python
 venv/

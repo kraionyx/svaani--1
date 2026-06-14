@@ -19,10 +19,15 @@ class GroundingReport(BaseModel):
     kept: int = 0
     dropped: list[str] = []
     flagged: list[str] = []
+    # Content-level fact verification (see app.validation.fidelity): items whose value
+    # was confirmed to actually appear in the cited transcript span(s), vs. those whose
+    # name/dose was inferred or normalized rather than heard.
+    verified: list[str] = []
+    mismatched: list[str] = []
 
     @property
     def all_grounded(self) -> bool:
-        return not self.dropped and not self.flagged
+        return not self.dropped and not self.flagged and not self.mismatched
 
 
 def _grounded(prov: Provenance, valid: set[str]) -> bool:

@@ -14,15 +14,29 @@ SCRIBE_SYSTEM = (
 )
 
 CLEAN_INSTRUCTION = (
-    "Correct only OBVIOUS speech-to-text errors (misheard drug names, numbers, medical "
-    "terms). Preserve the clinical meaning and the speaker labels and segment ids. Log "
-    "each change in `corrections`. Do not add, summarize, or remove content."
+    "Correct ONLY unambiguous speech-to-text word errors while preserving the exact clinical "
+    "meaning, the speaker labels, and the segment ids.\n"
+    "HARD CONSTRAINTS (safety-critical — breaking these fabricates clinical data):\n"
+    "- NEVER change any number, dose, quantity, strength, frequency, vital value, age, or "
+    "date. Copy every numeric token EXACTLY as transcribed — e.g. '1 mg' stays '1 mg'; do "
+    "NOT 'normalize' it to a typical dose such as '40 mg'.\n"
+    "- NEVER substitute a drug or medical term for a different one you believe was intended. "
+    "Keep the spoken token as-is even if it is not a recognized drug name (e.g. leave "
+    "'Irtrizol' unchanged — do NOT rename it to 'Itraconazole').\n"
+    "- Only fix obvious non-clinical transcription noise (clear misspellings of common words, "
+    "spacing, punctuation). When in any doubt, leave the text unchanged.\n"
+    "Log every change in `corrections`. Do not add, summarize, infer, or remove content."
 )
 
 EXTRACT_INSTRUCTION = (
     "Extract the clinical entities that were MENTIONED in the transcript into the schema. "
-    "Capture medications only under `medications_discussed`, verbatim. Attach provenance "
-    "span ids to every item.\n"
+    "Attach provenance span ids to every item; if you cannot cite a span, do not output it.\n"
+    "MEDICATIONS (safety-critical): capture each under `medications_discussed` exactly as "
+    "spoken. Copy `dose`, `route`, `frequency`, and `duration` VERBATIM from the transcript — "
+    "NEVER normalize, round, or substitute a 'typical' or 'standard' value, and NEVER rename "
+    "the drug to a similar real medication. If a spoken dose looks unusual (e.g. 'Pantoprazole "
+    "1 mg'), still record it verbatim. Put the exact source phrase in `verbatim_text`. If a "
+    "field was not spoken, leave it null — never fill it from medical knowledge.\n"
     "For each `examination` finding, set `region` to a canonical lowercase value: one of "
     "throat, nose, ear, oral_cavity, neck, chest, abdomen, cardiovascular, respiratory, "
     "neuro, skin, general. Map pharynx / tonsils / oropharynx / posterior pharyngeal wall "
@@ -31,7 +45,15 @@ EXTRACT_INSTRUCTION = (
 
 RISK_INSTRUCTION = (
     "Identify risk indications ALREADY PRESENT in the conversation (red-flag symptoms, "
-    "mentioned allergies, mentioned drugs/dosages, stated abnormal vitals). For each, cite "
-    "the transcript span ids in `evidence_span_ids`. Do NOT diagnose or recommend. This is "
-    "an attention aid for the reviewing clinician only."
+    "allergies / adverse drug reactions, stated abnormal vitals). For each marker, cite the "
+    "transcript span ids in `evidence_span_ids` AND quote the exact triggering words in "
+    "`evidence_text` (e.g. the patient's own sentence).\n"
+    "- Respect NEGATION: a patient denying a symptom or allergy ('no allergies', 'no chest "
+    "pain') is NOT a risk — either omit it or emit it at severity 'info' with a clearly "
+    "'denied / absent' message.\n"
+    "- Do NOT flag the doctor's screening QUESTION as a finding; flag only what was actually "
+    "reported.\n"
+    "- Do NOT emit medication_mentioned or dosage_mentioned markers — those are produced "
+    "deterministically from the grounded extraction.\n"
+    "Do NOT diagnose or recommend. This is an attention aid for the reviewing clinician only."
 )

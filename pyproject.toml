@@ -8,3 +8,10 @@ requires-python = ">=3.11"
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+    # Our own code must stay deprecation-clean: promote DeprecationWarning to an error...
+    "error::DeprecationWarning",
+    # ...except this third-party one we don't control: Starlette's TestClient warns that
+    # httpx is deprecated in favour of httpx2 (issued on import, not by our code).
+    "ignore:Using `httpx` with `starlette.testclient`:Warning",
+]

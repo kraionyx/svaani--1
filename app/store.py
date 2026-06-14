@@ -33,6 +33,10 @@ class SessionStore:
     def list(self) -> list[ConsultationSession]:
         return list(self._sessions.values())
 
+    def persist(self, session: ConsultationSession) -> None:
+        """Write-through hook after a session is mutated. No-op for the in-memory store
+        (the object is shared); the SQLite backend overrides this to save durably."""
+
 
 _store: SessionStore | None = None
 
@@ -40,5 +44,12 @@ _store: SessionStore | None = None
 def get_store() -> SessionStore:
     global _store
     if _store is None:
-        _store = SessionStore()
+        from app.config import get_settings
+
+        if get_settings().store_backend == "sqlite":
+            from app.store_sql import SqlSessionStore
+
+            _store = SqlSessionStore(get_settings())
+        else:
+            _store = SessionStore()
     return _store

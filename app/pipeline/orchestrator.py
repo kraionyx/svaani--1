@@ -6,6 +6,7 @@ from grounded items.
 """
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from pydantic import BaseModel
 from app.config import Settings, get_settings
 from app.llm.base import MedicalLLM, get_llm
 from app.pipeline.clean import clean_transcript
+from app.pipeline.combined import analyze_consultation
 from app.pipeline.extract import extract_clinical
 from app.pipeline.narrate import narrate_note
 from app.pipeline.note import generate_note
@@ -22,6 +24,7 @@ from app.schemas.note import ConsultationNote
 from app.schemas.risk import RiskAssessment
 from app.schemas.template import TemplateDefinition
 from app.schemas.transcript import CleanTranscript, RawTranscript
+from app.validation.fidelity import verify_medication_fidelity
 from app.validation.grounding import GroundingReport, ground_extraction
 
 
@@ -31,6 +34,39 @@ class PipelineResult(BaseModel):
     grounding: GroundingReport
     note: ConsultationNote
     risk: RiskAssessment
+
+
+logger = logging.getLogger("svaani.pipeline")
+
+
+def _staged_analyze(
+    raw: RawTranscript, llm: MedicalLLM, settings: Settings
+) -> tuple[CleanTranscript, ClinicalExtraction, list]:
+    """Original three-call path: clean, then extract ∥ risk concurrently."""
+    clean = clean_transcript(raw, llm, settings)
+    # Extraction and the LLM risk pass both depend only on `clean`, so run them
+    # concurrently — collapsing two sequential round-trips into one wall-clock wait.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        extraction_future = pool.submit(extract_clinical, clean, llm)
+        risk_markers_future = pool.submit(llm_risk_markers, clean, llm)
+        return clean, extraction_future.result(), risk_markers_future.result()
+
+
+def _analyze(
+    raw: RawTranscript, llm: MedicalLLM, settings: Settings
+) -> tuple[CleanTranscript, ClinicalExtraction, list]:
+    """Produce (clean, extraction, llm_risk_markers), preferring the single-pass call.
+
+    With ``single_pass_llm`` the three LLM-derived artifacts come from ONE round-trip;
+    any failure (or a disabled/absent LLM) falls back to the staged path so the note
+    is never blocked.
+    """
+    if settings.single_pass_llm and llm.available:
+        try:
+            return analyze_consultation(raw, llm, settings)
+        except Exception:  # noqa: BLE001 — best-effort; staged path is the safety net
+            logger.warning("single-pass analysis failed; falling back to staged pipeline", exc_info=True)
+    return _staged_analyze(raw, llm, settings)
 
 
 def run_pipeline(
@@ -43,21 +79,17 @@ def run_pipeline(
     settings = settings or get_settings()
     llm = llm or get_llm(settings)
 
-    clean = clean_transcript(raw, llm, settings)
-
-    # Extraction and the LLM risk pass both depend only on `clean`, so run them
-    # concurrently — this collapses two sequential round-trips into one wall-clock
-    # wait. Rule-based risk + grounding still run after, on the grounded extraction.
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        extraction_future = pool.submit(extract_clinical, clean, llm)
-        risk_markers_future = pool.submit(llm_risk_markers, clean, llm)
-        extraction = extraction_future.result()
-        risk_markers = risk_markers_future.result()
+    clean, extraction, risk_markers = _analyze(raw, llm, settings)
 
     valid_spans = raw.segment_ids() | clean.segment_ids()
     extraction, grounding = ground_extraction(
         extraction, valid_spans, drop=settings.drop_ungrounded_fields
     )
+
+    # Fact verification: grounding only proves the cited span exists; this proves the
+    # extracted medication name/dose was actually *said* in that span (catches a model
+    # that normalized '1 mg' -> '40 mg' or renamed a drug). Non-destructive — it flags.
+    grounding.verified, grounding.mismatched = verify_medication_fidelity(extraction, clean)
 
     note = generate_note(extraction, template)
     if settings.narrative_notes:
@@ -68,4 +100,31 @@ def run_pipeline(
 
     return PipelineResult(
         clean=clean, extraction=extraction, grounding=grounding, note=note, risk=risk
+    )
+
+
+def rebuild_from_extraction(
+    extraction: ClinicalExtraction,
+    template: TemplateDefinition,
+    clean: CleanTranscript | None,
+    risk: RiskAssessment,
+    settings: Settings,
+) -> PipelineResult:
+    """Re-derive grounding + note from a DOCTOR-EDITED extraction (no LLM call).
+
+    The doctor is the clinical authority, so we ground in *flag* mode — nothing is
+    dropped; manually added items (which have no transcript provenance) are simply
+    marked ungrounded for transparency. The note is re-rendered deterministically so
+    edits are reflected instantly, and fact verification is re-run so the reviewer
+    still sees which medication values match the transcript. Risk is left as-is (it is
+    edited separately via its own endpoint).
+    """
+    valid_spans = clean.segment_ids() if clean else set()
+    extraction, grounding = ground_extraction(extraction, valid_spans, drop=False)
+    if clean is not None:
+        grounding.verified, grounding.mismatched = verify_medication_fidelity(extraction, clean)
+    note = generate_note(extraction, template)
+    return PipelineResult(
+        clean=clean or CleanTranscript(session_id=extraction.session_id),
+        extraction=extraction, grounding=grounding, note=note, risk=risk,
     )

@@ -1,32 +1,43 @@
-"""WebSocket audio ingest.
+"""WebSocket consultation ingest — real-time streaming + batch-diarized hybrid.
 
 Wire protocol:
-  • binary frames  → raw PCM/audio bytes, appended to a per-session buffer.
-  • text frames    → JSON control messages: {"action": "start"|"stop", ...}.
+  • binary frames → raw 16 kHz mono PCM16 audio chunks (the browser recorder's output).
+  • text frames   → JSON control: {"action": "start"|"stop"|"ping", ...}.
 
-Outbound JSON events: ``stage_update``, ``final_segment``, ``risk_warning``,
-``draft_ready``, ``error``. On ``stop`` we transcribe the buffer (Sarvam V3 +
-diarization), run the grounded pipeline, and move the session to DRAFT for review.
+While the doctor records, audio is forwarded to Sarvam's **streaming** STT and live,
+speaker-unlabeled segments are emitted as ``final_segment`` events (sub-second). On
+``stop`` the buffered audio runs the **batch-diarized** pass to recover doctor/patient
+labels, then the grounded pipeline runs and results stream back. Streaming has no
+diarization, so this hybrid gives both live feedback and accurate final labels.
 
-This is a deliberately simple batch-at-stop skeleton; a production build would push
-chunks to Sarvam's streaming endpoint and emit ``partial_transcript`` events live
-(buffering/backpressure hooks are noted inline).
+If streaming is unavailable (no key / disabled / connect fails) it degrades to
+batch-at-stop. If batch diarization fails, the live streamed segments become the
+(unlabeled) transcript — the note is never blocked.
+
+Outbound events: ``stage_update``, ``partial_transcript``, ``final_segment``,
+``risk_warning``, ``draft_ready``, ``error``.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 
 from fastapi import WebSocket, WebSocketDisconnect
 
 from app.config import Settings
+from app.llm.base import get_llm
+from app.pipeline.narrate import stream_section_prose
 from app.pipeline.orchestrator import run_pipeline
 from app.schemas.session import ConsultationSession, ReviewState
+from app.schemas.transcript import RawTranscript
+from app.stt import sarvam_stream
 from app.stt.sarvam import get_stt
 from app.store import SessionStore
 from app.templates.registry import get_registry
 
+logger = logging.getLogger("svaani.audio")
 
 # Minimum captured-audio size; below this the recording is effectively silent.
 _MIN_AUDIO_BYTES = 1024
@@ -35,7 +46,63 @@ _MIN_AUDIO_BYTES = 1024
 async def consultation_ws(websocket: WebSocket, store: SessionStore, settings: Settings) -> None:
     await websocket.accept()
     session: ConsultationSession | None = None
-    buffer = bytearray()
+    buffer = bytearray()                       # raw PCM16 for the batch-diarized pass
+    live_segments: list[tuple[str, str]] = []  # (segment_id, text) from streaming STT
+    sock = None                                # open Sarvam streaming socket
+    stream_cm = None                           # its async context manager
+    reader_task: asyncio.Task | None = None
+
+    async def _read_stream() -> None:
+        """Pump streaming-STT responses to the browser as live segments."""
+        try:
+            async for resp in sock:
+                text = sarvam_stream.transcript_of(resp)
+                if not text:
+                    continue
+                seg_id = f"seg-{len(live_segments) + 1:04d}"
+                live_segments.append((seg_id, text))
+                await websocket.send_json({
+                    "type": "final_segment", "speaker": "unknown",
+                    "text": text, "span_id": seg_id, "confidence": 1.0,
+                })
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — streaming errors must not kill the consult
+            logger.warning("streaming reader stopped", exc_info=True)
+
+    async def _close_stream() -> None:
+        nonlocal sock, stream_cm, reader_task
+        if sock is not None:
+            try:
+                await sock.flush()
+                # Let the flush's trailing final(s) arrive before we cancel the reader.
+                # Wait the full window if nothing has arrived yet; once segments appear,
+                # stop ~0.6s after they stabilize. Bounded so stop never hangs.
+                last, stable, elapsed = len(live_segments), 0, 0.0
+                while elapsed < 3.0:
+                    await asyncio.sleep(0.2); elapsed += 0.2
+                    n = len(live_segments)
+                    if n > last:
+                        last, stable = n, 0
+                    elif n > 0:
+                        stable += 1
+                        if stable >= 3:
+                            break
+            except Exception:  # noqa: BLE001
+                pass
+        if reader_task is not None:
+            reader_task.cancel()
+            try:
+                await reader_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            reader_task = None
+        if stream_cm is not None:
+            try:
+                await stream_cm.__aexit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
+            stream_cm = sock = None
 
     try:
         while True:
@@ -43,17 +110,24 @@ async def consultation_ws(websocket: WebSocket, store: SessionStore, settings: S
             if message.get("type") == "websocket.disconnect":
                 break
 
+            # ── audio frame ──────────────────────────────────────────────────
             if message.get("bytes") is not None:
-                # Backpressure hook: cap/flush buffer here for true streaming.
-                buffer.extend(message["bytes"])
+                chunk = message["bytes"]
+                buffer.extend(chunk)
+                if sock is not None:
+                    try:
+                        await sock.transcribe(audio=sarvam_stream.encode_chunk(chunk), sample_rate=16000)
+                    except Exception:  # noqa: BLE001 — drop streaming, keep buffering for batch
+                        logger.warning("streaming send failed; continuing buffer-only", exc_info=True)
+                        await _close_stream()
                 continue
 
             if message.get("text") is None:
                 continue
-
             data = json.loads(message["text"])
             action = data.get("action")
 
+            # ── start ────────────────────────────────────────────────────────
             if action == "start":
                 sid = data.get("session_id") or f"sess-{uuid.uuid4().hex[:12]}"
                 template_id = data.get("template_id", "soap")
@@ -62,83 +136,217 @@ async def consultation_ws(websocket: WebSocket, store: SessionStore, settings: S
                 )
                 store.create(session)
                 buffer.clear()
-                await websocket.send_json(
-                    {"type": "stage_update", "stage": "listening", "session_id": sid}
-                )
+                live_segments.clear()
+                streaming = False
+                if sarvam_stream.streaming_available(settings):
+                    try:
+                        stream_cm = sarvam_stream.open_stream(settings)
+                        sock = await stream_cm.__aenter__()
+                        reader_task = asyncio.create_task(_read_stream())
+                        streaming = True
+                    except Exception:  # noqa: BLE001 — fall back to batch-at-stop
+                        logger.warning("streaming STT connect failed; batch-at-stop", exc_info=True)
+                        stream_cm = sock = None
+                await websocket.send_json({
+                    "type": "stage_update", "stage": "listening",
+                    "session_id": sid, "streaming": streaming,
+                })
 
+            # ── stop ─────────────────────────────────────────────────────────
             elif action == "stop":
                 if session is None:
                     await websocket.send_json({"type": "error", "message": "no active session"})
                     continue
+                await _close_stream()  # cancel reader first → no concurrent sends below
 
-                if len(buffer) < _MIN_AUDIO_BYTES:
+                if len(buffer) < _MIN_AUDIO_BYTES and not live_segments:
                     session.transition(ReviewState.ESCALATION_REQUIRED)
-                    await websocket.send_json(
-                        {"type": "error", "stage": "processing", "session_id": session.session_id,
-                         "state": session.state.value, "message": "no audible speech captured"}
-                    )
+                    await websocket.send_json({
+                        "type": "error", "stage": "processing", "session_id": session.session_id,
+                        "state": session.state.value, "message": "no audible speech captured",
+                    })
                     continue
-
-                session.transition(ReviewState.PROCESSING)
-                await websocket.send_json(
-                    {"type": "stage_update", "stage": "processing", "session_id": session.session_id}
-                )
-
-                try:
-                    stt = get_stt(settings)
-                    # Batch-diarized when available (accurate, speaker-labeled), with
-                    # automatic real-time fallback so a note is never blocked. STT and the
-                    # pipeline are blocking, so run them in a thread to keep the event loop
-                    # responsive (ping/pong, concurrent consults).
-                    raw = await asyncio.to_thread(
-                        stt.transcribe_for_session, bytes(buffer), session_id=session.session_id
-                    )
-                    if not any((seg.text or "").strip() for seg in raw.segments):
-                        raise RuntimeError("no speech detected in audio")
-                    for seg in raw.segments:
-                        await websocket.send_json(
-                            {"type": "final_segment", "speaker": seg.speaker.value,
-                             "text": seg.text, "span_id": seg.id, "confidence": seg.confidence}
-                        )
-
-                    await websocket.send_json(
-                        {"type": "stage_update", "stage": "generating", "session_id": session.session_id}
-                    )
-                    template = get_registry().get(session.template_id)
-                    result = await asyncio.to_thread(run_pipeline, raw, template, settings=settings)
-
-                    session.raw_transcript = raw
-                    session.clean_transcript = result.clean
-                    session.extraction = result.extraction
-                    session.note = result.note
-                    session.risk = result.risk
-                    session.template_version = template.version
-                    store.set_result(session.session_id, result)
-                    session.transition(ReviewState.DRAFT)
-
-                    for marker in result.risk.markers:
-                        await websocket.send_json(
-                            {"type": "risk_warning", "severity": marker.severity.value,
-                             "risk_type": marker.type.value, "message": marker.message,
-                             "evidence_span_ids": marker.evidence_span_ids}
-                        )
-
-                    await websocket.send_json(
-                        {"type": "draft_ready", "session_id": session.session_id,
-                         "state": session.state.value, "risk_score": result.risk.score,
-                         "note_markdown": result.note.to_markdown(),
-                         "grounding": result.grounding.model_dump()}
-                    )
-                except Exception as exc:
-                    # STT/LLM failure → escalate, never emit a silent blank record.
-                    session.transition(ReviewState.ESCALATION_REQUIRED)
-                    await websocket.send_json(
-                        {"type": "error", "stage": "processing", "session_id": session.session_id,
-                         "state": session.state.value, "message": f"processing failed: {exc}"}
-                    )
+                await _finalize(websocket, store, settings, session, bytes(buffer), live_segments)
 
             elif action == "ping":
                 await websocket.send_json({"type": "pong"})
 
     except WebSocketDisconnect:
         return
+    finally:
+        await _close_stream()
+
+
+async def _stream_note(websocket: WebSocket, note, llm, *, timeout_s: float) -> None:
+    """Stream all non-empty sections' narrated prose CONCURRENTLY, token-by-token.
+
+    Each section narrates in its own worker thread (the LLM stream is blocking); their
+    chunks funnel through ONE merged queue so WS sends stay serialized (Starlette can't
+    take concurrent sends). Latency is max(section) instead of sum(section). An overall
+    ``timeout_s`` guards against a slow/hung section. Section text is accumulated back
+    into the note so the persisted/exported note matches what was shown.
+    """
+    sections = [s for s in note.sections if not s.empty]
+    if not sections:
+        return
+    loop = asyncio.get_running_loop()
+    merged: asyncio.Queue = asyncio.Queue()
+    _SENTINEL = object()
+    texts: dict[str, str] = {s.section_id: "" for s in sections}
+
+    def _worker(sec) -> None:
+        try:
+            for chunk in stream_section_prose(sec, llm):
+                loop.call_soon_threadsafe(merged.put_nowait, (sec.section_id, chunk))
+        except Exception:  # noqa: BLE001 — keep the deterministic text on failure
+            logger.warning("section narration stream failed", exc_info=True)
+        finally:
+            loop.call_soon_threadsafe(merged.put_nowait, (sec.section_id, _SENTINEL))
+
+    for sec in sections:  # fire all narrations at once
+        loop.run_in_executor(None, _worker, sec)
+        await websocket.send_json({
+            "type": "note_chunk", "section_id": sec.section_id, "label": sec.label, "start": True,
+        })
+
+    remaining, done_ids, deadline = len(sections), set(), loop.time() + timeout_s
+    while remaining > 0:
+        try:
+            sid, item = await asyncio.wait_for(merged.get(), timeout=max(0.1, deadline - loop.time()))
+        except asyncio.TimeoutError:
+            logger.warning("note streaming exceeded %ss; finishing with partial prose", timeout_s)
+            break
+        if item is _SENTINEL:
+            remaining -= 1
+            done_ids.add(sid)
+            await websocket.send_json({"type": "note_chunk", "section_id": sid, "done": True})
+        else:
+            texts[sid] += item
+            await websocket.send_json({"type": "note_chunk", "section_id": sid, "delta": item})
+
+    for sec in sections:
+        if texts[sec.section_id].strip():
+            sec.content_text = texts[sec.section_id].strip()
+        if sec.section_id not in done_ids:  # ensure the UI doesn't hang on a section
+            await websocket.send_json({"type": "note_chunk", "section_id": sec.section_id, "done": True})
+
+
+def _has_text(raw: RawTranscript) -> bool:
+    return any((s.text or "").strip() for s in raw.segments)
+
+
+async def _diarize(settings: Settings, session_id: str, pcm: bytes) -> RawTranscript | None:
+    """Run the bounded batch-diarized pass; return None if unavailable/slow/failed."""
+    if len(pcm) < _MIN_AUDIO_BYTES:
+        return None
+    try:
+        wav = sarvam_stream.pcm16_to_wav(pcm, rate=16000)
+        return await asyncio.wait_for(
+            asyncio.to_thread(get_stt(settings).transcribe_for_session, wav, session_id=session_id),
+            timeout=settings.streaming_diarize_timeout_s,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("diarization slow (>%ss); keeping live transcript", settings.streaming_diarize_timeout_s)
+    except Exception:  # noqa: BLE001 — diarization failed; keep live transcript
+        logger.warning("batch diarization failed; keeping live transcript", exc_info=True)
+    return None
+
+
+async def _emit_pass(
+    websocket: WebSocket, store: SessionStore, settings: Settings,
+    session: ConsultationSession, raw: RawTranscript, template, *, refine: bool,
+) -> None:
+    """Run the grounded pipeline on ``raw``, persist outputs, and emit to the client.
+
+    ``refine=False`` (fast/only pass): deterministic note + token-streamed narration,
+    emits ``analysis`` early then ``draft_ready``. ``refine=True``: single-call narration,
+    emits ``refined`` (the client re-fetches the diarized transcript + sharpened outputs).
+    """
+    # Fast pass streams the prose; refine pass narrates in one call (already accurate).
+    pipeline_settings = settings.model_copy(update={"narrative_notes": refine})
+    result = await asyncio.to_thread(run_pipeline, raw, template, settings=pipeline_settings)
+
+    session.raw_transcript = raw
+    session.clean_transcript = result.clean
+    session.extraction = result.extraction
+    session.note = result.note
+    session.risk = result.risk
+    session.template_version = template.version
+    store.set_result(session.session_id, result)
+
+    if refine:
+        store.persist(session)
+        await websocket.send_json({
+            "type": "refined", "session_id": session.session_id,
+            "risk_score": result.risk.score, "grounding": result.grounding.model_dump(),
+        })
+        return
+
+    # Fast pass: populate Extraction/Risk/Grounding immediately, then stream the note.
+    await websocket.send_json({
+        "type": "analysis", "session_id": session.session_id,
+        "extraction": result.extraction.model_dump(mode="json"),
+        "risk": result.risk.model_dump(mode="json"),
+        "grounding": result.grounding.model_dump(),
+    })
+    await websocket.send_json(
+        {"type": "stage_update", "stage": "generating", "session_id": session.session_id}
+    )
+    if settings.narrative_notes:
+        await _stream_note(websocket, result.note, get_llm(settings), timeout_s=settings.note_stream_timeout_s)
+    if session.state is ReviewState.PROCESSING:
+        session.transition(ReviewState.DRAFT)
+    store.persist(session)
+    for marker in result.risk.markers:
+        await websocket.send_json({
+            "type": "risk_warning", "severity": marker.severity.value,
+            "risk_type": marker.type.value, "message": marker.message,
+            "evidence_span_ids": marker.evidence_span_ids, "evidence_text": marker.evidence_text,
+        })
+    await websocket.send_json({
+        "type": "draft_ready", "session_id": session.session_id, "state": session.state.value,
+        "risk_score": result.risk.score, "note_markdown": result.note.to_markdown(),
+        "grounding": result.grounding.model_dump(),
+    })
+
+
+async def _finalize(
+    websocket: WebSocket,
+    store: SessionStore,
+    settings: Settings,
+    session: ConsultationSession,
+    pcm: bytes,
+    live_segments: list[tuple[str, str]],
+) -> None:
+    """On stop: hybrid fast-then-refine. Generate from the live transcript immediately,
+    then re-generate from the accurate diarized transcript when it's ready."""
+    session.transition(ReviewState.PROCESSING)
+    await websocket.send_json(
+        {"type": "stage_update", "stage": "processing", "session_id": session.session_id}
+    )
+    try:
+        template = get_registry().get(session.template_id)
+        live_raw = sarvam_stream.raw_from_segments(session.session_id, live_segments)
+        have_live = _has_text(live_raw)
+
+        if settings.hybrid_refine and have_live:
+            # 1) Fast draft from the live transcript (seconds).
+            await _emit_pass(websocket, store, settings, session, live_raw, template, refine=False)
+            # 2) Refine from the diarized transcript when the batch job finishes.
+            diar_raw = await _diarize(settings, session.session_id, pcm)
+            if diar_raw is not None and _has_text(diar_raw):
+                await _emit_pass(websocket, store, settings, session, diar_raw, template, refine=True)
+        else:
+            # Single pass: prefer the accurate diarized transcript, fall back to live.
+            raw = await _diarize(settings, session.session_id, pcm)
+            if raw is None or not _has_text(raw):
+                raw = live_raw
+            if not _has_text(raw):
+                raise RuntimeError("no speech detected in audio")
+            await _emit_pass(websocket, store, settings, session, raw, template, refine=False)
+    except Exception as exc:  # noqa: BLE001 — escalate, never emit a silent blank record
+        session.transition(ReviewState.ESCALATION_REQUIRED)
+        await websocket.send_json({
+            "type": "error", "stage": "processing", "session_id": session.session_id,
+            "state": session.state.value, "message": f"processing failed: {exc}",
+        })

@@ -11,7 +11,7 @@ the app runs without the SDK installed.
 """
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import Iterator, TypeVar
 
 from pydantic import BaseModel
 
@@ -86,3 +86,15 @@ class VertexGeminiLLM:
             config=self._config(system=system, schema=None),
         )
         return resp.text or ""
+
+    def generate_text_stream(self, prompt: str, *, system: str | None = None) -> Iterator[str]:
+        """Stream the model's text output chunk-by-chunk (server-side streaming)."""
+        stream = self.client.models.generate_content_stream(
+            model=self.settings.gemini_model,
+            contents=prompt,
+            config=self._config(system=system, schema=None),
+        )
+        for chunk in stream:
+            text = getattr(chunk, "text", None)
+            if text:
+                yield text

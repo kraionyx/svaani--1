@@ -37,6 +37,11 @@ class RiskMarker(BaseModel):
     evidence_span_ids: list[str] = Field(
         default_factory=list, description="Transcript spans that triggered this marker."
     )
+    evidence_text: str = Field(
+        default="",
+        description="The exact words from the transcript that triggered this marker, quoted "
+        "verbatim so the reviewer sees the conversational context (who said what).",
+    )
     authoritative: bool = Field(default=False, frozen=True)  # always False by contract
 
     @field_validator("authoritative")

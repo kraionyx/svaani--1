@@ -365,3 +365,49 @@ gated on `is_exportable` (FINALIZED only) and `EXPORT` permission, and audited.
 8. **Clinical governance:** IEC 62304 lifecycle, a documented clinical validation study
    (WER, entity F1, grounding precision, reviewer-edit rate) before go-live, and a
    human-in-the-loop SLA — no note is finalized without a clinician.
+
+---
+
+## 13. v2 — real-time, single-pass, hardened (current build)
+
+The architecture above still holds; v2 makes it **real-time and production-shaped** while
+keeping every safety guarantee (grounding, fact verification, no-Rx, human sign-off).
+
+**Real-time streaming consult** ([`audio/ws.py`](../app/audio/ws.py), [`stt/sarvam_stream.py`](../app/stt/sarvam_stream.py))
+- Browser streams 16 kHz PCM over the WebSocket → **Sarvam streaming STT** (`saaras:v3`)
+  → live `final_segment` events sub-second. On `stop`, the buffered audio runs the
+  **batch-diarized** pass to recover doctor/patient labels (streaming has no diarization)
+  — a hybrid: live feedback + accurate final labels. Degrades to batch-at-stop, and to
+  the live segments if diarization fails (the note is never blocked). Flag: `SCRIBE_STREAMING_STT`.
+
+**Single-pass LLM** ([`pipeline/combined.py`](../app/pipeline/combined.py))
+- Clean + extract + risk are produced in **one** Gemini call (was 3), with automatic
+  fallback to the staged path. Note narration is **streamed token-by-token** to the UI
+  (`note_chunk` events, [`pipeline/narrate.py`](../app/pipeline/narrate.py)). Model:
+  **`gemini-3.5-flash`** (~3× faster than 2.5-flash here). Flag: `SCRIBE_SINGLE_PASS_LLM`.
+
+**Content-level fact verification** ([`validation/fidelity.py`](../app/validation/fidelity.py))
+- Grounding proves a cited span *exists*; fidelity proves the medication **name/dose was
+  actually said** in it — catching a model that normalized `1 mg`→`40 mg` or renamed a drug.
+  Mismatches surface in the Grounding tab; nothing is silently trusted.
+
+**Structured editing** — `PUT /sessions/{id}/extraction` and `/risk` (plus the existing
+note edit) let the clinician add/remove/edit items; an extraction edit re-renders the note
+and re-verifies against the transcript.
+
+**Interop & coding** — `GET /sessions/{id}/export/fhir` emits a **FHIR R4** document Bundle
+([`export/fhir.py`](../app/export/fhir.py)); `GET /sessions/{id}/coding` returns grounded,
+non-authoritative **ICD-10** hints ([`pipeline/coding.py`](../app/pipeline/coding.py)).
+
+**Hardening**
+- **Durable encrypted store** ([`store_sql.py`](../app/store_sql.py)): SQLite with PHI
+  encrypted at rest via `FieldCipher`; same `get_store()` interface. Flag: `SCRIBE_STORE_BACKEND=sqlite`.
+- **Auth** ([`security/auth.py`](../app/security/auth.py)): `SCRIBE_AUTH_MODE=jwt` requires a
+  verified bearer (HS256 secret or RS256/JWKS for Keycloak); `dev` keeps the header scaffold.
+- **Observability** ([`observability.py`](../app/observability.py)): Prometheus `/metrics`
+  (per-route latency histograms) + `X-Request-ID` propagation + access logs.
+- **Docker**: multi-stage `Dockerfile` (build SPA → serve with the API) + `docker-compose.yml`.
+
+**Frontend** — a Vite + React + TypeScript SPA in [`web-app/`](../web-app) (served at `/app`,
+the default): live transcript pane, streaming note, real-time risk, the structured editors,
+and sign-off. The legacy static UI remains at `/ui` as a fallback.
