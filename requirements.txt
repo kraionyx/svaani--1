@@ -20,6 +20,11 @@ sarvamai>=0.1.28          # Sarvam V3 STT (real-time + batch diarization)
 pyjwt>=2.8                # JWT bearer auth (SCRIBE_AUTH_MODE=jwt); PyJWKClient for OIDC/Keycloak
 prometheus-client>=0.20  # /metrics endpoint + per-stage latency histograms
 
+# ── Supabase/Postgres store (only needed for SCRIBE_STORE_BACKEND=supabase) ───────
+# Deferred import — the app boots without these unless the supabase backend is selected.
+psycopg[binary]>=3.1     # Postgres driver for the Supabase session store
+psycopg-pool>=3.2        # connection pool (small instance caps total connections)
+
 # ── Optional integrations ──────────────────────────────────────────────────────
 #   presidio-analyzer>=2.2   # PHI detection  (also: presidio-anonymizer, spaCy model)
 #   presidio-anonymizer>=2.2

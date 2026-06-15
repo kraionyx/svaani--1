@@ -28,6 +28,12 @@ interface AppState {
   raw: RawTranscript | null;
   clean: CleanTranscript | null;
 
+  // Intelligence (Goals 1-5)
+  confidenceBand: 'high' | 'moderate' | 'low' | null;
+  confidenceReasons: string[];
+  modeNotice: { from: string; to: string; reason: string; est_delay_s: number[] } | null;
+  reviewSubmitted: boolean;
+
   set: (p: Partial<AppState>) => void;
   resetSession: () => void;
   addSegment: (s: LiveSegment) => void;
@@ -59,11 +65,17 @@ export const useStore = create<AppState>((set) => ({
   raw: null,
   clean: null,
 
+  confidenceBand: null,
+  confidenceReasons: [],
+  modeNotice: null,
+  reviewSubmitted: false,
+
   set: (p) => set(p),
   resetSession: () => set({
     sessionId: null, reviewState: null, stage: '', streaming: false, segments: [],
     liveNote: {}, liveNoteOrder: [], note: null, extraction: null, risk: null,
     grounding: null, raw: null, clean: null,
+    confidenceBand: null, confidenceReasons: [], modeNotice: null, reviewSubmitted: false,
   }),
   addSegment: (s) => set((st) => {
     // A `final` segment replaces the live (unlabeled) view with the diarized one.
