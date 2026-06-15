@@ -140,16 +140,7 @@ export function App() {
   return (
     <div className="shell" style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', width: '100%' }}>
       <header className="topbar">
-        <div className="brand">
-          <span className="logo">𝓢</span>
-          <div className="brand-id">
-            <b>Svaani<span className="dot">.</span></b>
-            <span className="sub">AI Medical Scribe</span>
-          </div>
-          <svg className="ekg" viewBox="0 0 132 24" aria-hidden="true" focusable="false">
-            <path d="M0 12 H46 l3.5 -8 l4.5 16 l4 -13 l3 5 H78 l3.5 -10 l4.5 18 l3 -8 H132" />
-          </svg>
-        </div>
+        <div className="brand"><b>Svaani.</b><span className="sub">AI Medical Scribe</span></div>
         <div className="topctrls">
           <span className={`pill ${s.health?.sarvam === 'live' ? 'live' : 'mock'}`}><span className="d" />STT: {s.health?.sarvam || '…'}</span>
           <span className={`pill ${s.health?.vertex === 'live' ? 'live' : 'mock'}`}><span className="d" />LLM: {s.health?.vertex || '…'}</span>
