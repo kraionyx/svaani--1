@@ -10,32 +10,45 @@ interface Props {
 }
 
 export function Recorder(p: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const segments = useStore((s) => s.segments);
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const glowRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    }
+  }, [segments]);
+
   useEffect(() => {
     if (!p.analyser || !p.recording) return;
-    const cv = canvasRef.current!; const ctx = cv.getContext('2d')!;
     const data = new Uint8Array(p.analyser.frequencyBinCount);
     let raf = 0;
     const draw = () => {
       raf = requestAnimationFrame(draw);
-      const w = cv.width = cv.clientWidth || 280; const h = cv.height = 46;
-      ctx.clearRect(0, 0, w, h);
       p.analyser!.getByteFrequencyData(data);
-      const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#0fb9a6';
-      ctx.fillStyle = accent;
-      const bars = 40, step = Math.max(1, Math.floor(data.length / bars)), bw = w / bars;
-      for (let i = 0; i < bars; i++) { const v = data[i * step] / 255; const bh = Math.max(2, v * h * 0.95); ctx.fillRect(i * bw + 1, (h - bh) / 2, bw - 2, bh); }
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += data[i];
+      const avg = sum / data.length;
+      if (glowRef.current) {
+        const intensity = avg / 255;
+        glowRef.current.style.opacity = `${0.3 + intensity * 0.7}`;
+        glowRef.current.style.transform = `scaleY(${1 + intensity})`;
+      }
     };
     draw();
     return () => cancelAnimationFrame(raf);
   }, [p.analyser, p.recording]);
 
   return (
-    <div className="recorder-panel">
-      <div style={{ flexGrow: 1 }}></div>
+    <>
+      { (p.recording || p.busy) && (
+        <div ref={glowRef} className="aurora-glow"></div>
+      )}
+      <div className="recorder-panel" style={{ zIndex: 1, position: 'relative' }}>
+        <div style={{ flexGrow: 1 }}></div>
 
       { p.recording || p.busy ? (
         <div className="spotify-lyrics-container">
@@ -45,33 +58,38 @@ export function Recorder(p: Props) {
                <h3>{p.stage || 'Processing consultation...'}</h3>
             </div>
           ) : (
-             <div className="lyrics-scroll">
-                {segments.map((seg, i) => (
-                   <span key={seg.id || i} className={`lyric-txt ${seg.is_final ? 'final' : 'active'}`}>
-                     {seg.text}{' '}
-                     {seg.is_final === false && <span className="caret">_</span>}
-                   </span>
-                ))}
+             <div style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                 <div className="lyrics-scroll" ref={scrollRef} style={{ zIndex: 1, position: 'relative', paddingBottom: '80px' }}>
+                    {segments.map((seg, i) => (
+                       <span key={seg.span_id || i} className={`lyric-txt ${seg.final ? 'final' : 'active'}`}>
+                         {seg.text}{' '}
+                         {seg.final === false && <span className="caret">_</span>}
+                       </span>
+                    ))}
+                 </div>
              </div>
           )}
         </div>
       ) : (
-        <div className="templates-grid">
-          {p.templates.map((t) => (
-            <button 
-              key={t.template_id} 
-              className={`doc-icon ${p.templateId === t.template_id ? 'active' : ''}`}
-              onClick={() => p.onTemplate(t.template_id)}
-              disabled={p.busy}
-            >
-              <div className="doc-preview">
-                <div className="line"></div>
-                <div className="line"></div>
-                <div className="line half"></div>
-              </div>
-              <span className="doc-name">{t.name}</span>
-            </button>
-          ))}
+        <div className="templates-container" style={{ position: 'relative', width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <h2 style={{ position: 'absolute', top: '-100px', fontSize: '1.8rem', fontWeight: 'bold', color: 'gray', margin: 0, textAlign: 'center', width: '100%' }}>Choose Template</h2>
+          <div className="templates-grid" style={{ margin: 0 }}>
+            {p.templates.map((t) => (
+              <button 
+                key={t.template_id} 
+                className={`doc-icon ${p.templateId === t.template_id ? 'active' : ''}`}
+                onClick={() => p.onTemplate(t.template_id)}
+                disabled={p.busy}
+              >
+                <div className="doc-preview">
+                  <div className="line"></div>
+                  <div className="line"></div>
+                  <div className="line half"></div>
+                </div>
+                <span className="doc-name">{t.name}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -94,6 +112,7 @@ export function Recorder(p: Props) {
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         </button>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

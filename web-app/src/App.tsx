@@ -127,7 +127,7 @@ export function App() {
   return (
     <div className="shell" style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', width: '100%' }}>
       <header className="topbar">
-        <div className="brand"><b>Svaani.</b><span className="sub">AI Medical Scribe — a faithful scribe, never prescribes</span></div>
+        <div className="brand"><b>Svaani.</b><span className="sub">AI Medical Scribe</span></div>
         <div className="topctrls">
           <span className={`pill ${s.health?.sarvam === 'live' ? 'live' : 'mock'}`}><span className="d" />STT: {s.health?.sarvam || '…'}</span>
           <span className={`pill ${s.health?.vertex === 'live' ? 'live' : 'mock'}`}><span className="d" />LLM: {s.health?.vertex || '…'}</span>
