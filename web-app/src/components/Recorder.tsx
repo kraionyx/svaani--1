@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useStore } from '../store';
 
 interface Props {
   recording: boolean; busy: boolean; streaming: boolean; stage: string;
@@ -11,6 +12,7 @@ interface Props {
 export function Recorder(p: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const segments = useStore((s) => s.segments);
 
   useEffect(() => {
     if (!p.analyser || !p.recording) return;
@@ -32,33 +34,66 @@ export function Recorder(p: Props) {
   }, [p.analyser, p.recording]);
 
   return (
-    <div className="card panel">
-      <div className="step-h"><span className="n">1</span><h3>Capture</h3></div>
-      <label className="lbl">Template</label>
-      <select value={p.templateId} disabled={p.busy} onChange={(e) => p.onTemplate(e.target.value)}>
-        {p.templates.map((t) => <option key={t.template_id} value={t.template_id}>{t.name}</option>)}
-      </select>
+    <div className="recorder-panel">
+      <div style={{ flexGrow: 1 }}></div>
 
-      <div className={`mic-wrap ${p.recording ? 'live' : ''}`}>
-        <canvas ref={canvasRef} className="mic-canvas" />
-        <div className="mic-status">
-          {p.recording ? <b>Listening… {p.streaming ? '(streaming live)' : ''}</b>
-            : p.busy ? <b>{p.stage || 'Processing'}…</b>
-              : 'Ready — press record to start.'}
+      { p.recording || p.busy ? (
+        <div className="spotify-lyrics-container">
+          {p.busy && !p.recording ? (
+            <div className="processing-state">
+               <div className="spinner"></div>
+               <h3>{p.stage || 'Processing consultation...'}</h3>
+            </div>
+          ) : (
+             <div className="lyrics-scroll">
+                {segments.map((seg, i) => (
+                   <span key={seg.id || i} className={`lyric-txt ${seg.is_final ? 'final' : 'active'}`}>
+                     {seg.text}{' '}
+                     {seg.is_final === false && <span className="caret">_</span>}
+                   </span>
+                ))}
+             </div>
+          )}
         </div>
-      </div>
+      ) : (
+        <div className="templates-grid">
+          {p.templates.map((t) => (
+            <button 
+              key={t.template_id} 
+              className={`doc-icon ${p.templateId === t.template_id ? 'active' : ''}`}
+              onClick={() => p.onTemplate(t.template_id)}
+              disabled={p.busy}
+            >
+              <div className="doc-preview">
+                <div className="line"></div>
+                <div className="line"></div>
+                <div className="line half"></div>
+              </div>
+              <span className="doc-name">{t.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
-      <button className={`btn big ${p.recording ? 'danger' : 'primary'}`} onClick={p.onRecord} disabled={p.busy && !p.recording}>
-        {p.recording ? '■ Stop & finalize' : '● Record consultation'}
-      </button>
 
-      <div className="row">
+
+      <div style={{ flexGrow: 1 }}></div>
+
+      <div className="record-controls-row">
         <input ref={fileRef} type="file" accept="audio/*" style={{ display: 'none' }}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) p.onUpload(f); e.currentTarget.value = ''; }} />
-        <button className="btn ghost sm" disabled={p.busy} onClick={() => fileRef.current?.click()}>Upload audio</button>
-        <button className="btn ghost sm" disabled={p.busy} onClick={p.onSimulate}>▶ Simulate</button>
+        <button className="icon-btn" disabled={p.busy} onClick={() => fileRef.current?.click()} title="Upload audio">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        
+        <button className={`pill-btn ${p.recording ? 'danger' : 'primary'}`} onClick={p.onRecord} disabled={p.busy && !p.recording}>
+          {p.recording ? '■ Stop & finalize' : '● Start Recording'}
+        </button>
+
+        <button className="icon-btn" disabled={p.busy} onClick={p.onSimulate} title="Simulate">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </button>
       </div>
-      <p className="hint">Record uses real-time streaming STT; on stop, the consult is diarized and the note streams in.</p>
     </div>
   );
 }
