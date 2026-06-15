@@ -48,7 +48,7 @@ export function Recorder(p: Props) {
         </div>
       </div>
 
-      <button className={`btn big ${p.recording ? 'danger' : ''}`} onClick={p.onRecord} disabled={p.busy && !p.recording}>
+      <button className={`btn big ${p.recording ? 'danger' : 'primary'}`} onClick={p.onRecord} disabled={p.busy && !p.recording}>
         {p.recording ? '■ Stop & finalize' : '● Record consultation'}
       </button>
 
