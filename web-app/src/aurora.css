@@ -1,0 +1,30 @@
+/* ── Aurora Glow Animation ── */
+.aurora-glow {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 40vh;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(
+    60deg,
+    var(--accent) 0%,
+    rgba(79, 172, 254, 0.8) 30%,
+    rgba(0, 242, 254, 0.8) 60%,
+    var(--accent) 100%
+  );
+  background-size: 300% 300%;
+  animation: aurora-wave 6s ease-in-out infinite alternate;
+  filter: blur(50px);
+  mask-image: linear-gradient(to top, black 10%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to top, black 10%, transparent 100%);
+  transition: opacity 0.05s ease, transform 0.05s ease;
+  transform-origin: bottom center;
+}
+
+@keyframes aurora-wave {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}

@@ -24,20 +24,35 @@ export function SignOff(p: Props) {
   }
 
   return (
-    <div className="card panel">
-      <div className="step-h"><span className="n">2</span><h3>Review &amp; sign-off</h3></div>
-      <div className="row">
+    <div className="sign-off-navbar" style={{ 
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
+      padding: 'var(--space-sm) var(--space-xl)', 
+      borderBottom: '1px solid var(--border-soft)',
+      background: 'var(--background)',
+      width: '100%',
+      boxSizing: 'border-box'
+    }}>
+      <div className="row" style={{ alignItems: 'center', gap: '8px', marginTop: 0 }}>
+        <h3 style={{ margin: 0, marginRight: '16px', fontSize: '1rem' }}>Review &amp; Sign-off</h3>
         <button className="btn ghost sm" disabled={!can('in_review')} onClick={() => p.onTransition('in_review')}>Start review</button>
         <button className="btn ghost sm" disabled={!can('approved')} onClick={() => p.onTransition('approved')}>Approve</button>
+        <button className="btn sm" disabled={p.state !== 'approved'} onClick={p.onOpenSign}>✎ Finalize &amp; sign</button>
       </div>
-      <button className="btn big" disabled={p.state !== 'approved'} onClick={p.onOpenSign}>✎ Finalize &amp; sign</button>
-      <p className="hint">Edit &amp; approve the note, then finalize with a signature. Only a finalized note can be exported.</p>
 
-      <div className="step-h"><span className="n">3</span><h3>Export</h3></div>
-      <div className="row wrap">
-        {['json', 'markdown', 'pdf', 'fhir'].map((f) => (
-          <button key={f} className="btn ghost sm" disabled={!finalized} onClick={() => p.onExport(f)}>{f.toUpperCase()}</button>
-        ))}
+      <div className="row wrap" style={{ alignItems: 'center', gap: '8px', marginTop: 0 }}>
+        <select 
+          className="btn ghost sm" 
+          disabled={!finalized} 
+          value=""
+          onChange={(e) => p.onExport(e.target.value)}
+          style={{ appearance: 'none', cursor: 'pointer', outline: 'none', paddingRight: '24px', background: 'var(--surface) url("data:image/svg+xml;utf8,<svg fill=\'%23888\' height=\'24\' viewBox=\'0 0 24 24\' width=\'24\' xmlns=\'http://www.w3.org/2000/svg\'><path d=\'M7 10l5 5 5-5z\'/><path d=\'M0 0h24v24H0z\' fill=\'none\'/></svg>") no-repeat right 4px center', backgroundSize: '16px' }}
+        >
+          <option value="" disabled hidden>Export</option>
+          <option value="json">JSON</option>
+          <option value="markdown">Markdown</option>
+          <option value="pdf">PDF</option>
+          <option value="fhir">FHIR</option>
+        </select>
       </div>
 
       {p.signOpen && (
