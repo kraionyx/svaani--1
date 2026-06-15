@@ -11,6 +11,9 @@ export interface ConsultEvents {
   onDraft?: (d: { session_id: string; state: string; risk_score: number; note_markdown: string; grounding: Grounding }) => void;
   // Refine pass: diarized transcript + sharpened outputs are ready to re-fetch.
   onRefined?: (r: { session_id: string; risk_score: number; grounding: Grounding }) => void;
+  // Intelligence events (Goals 4 & 5).
+  onConfidenceUpdate?: (c: { confidence_band: string; confidence_pct: number; confidence_reasons: string[]; is_complex: boolean }) => void;
+  onModeSwitch?: (m: { from: string; to: string; reason: string; est_delay_s: number[] }) => void;
   onError?: (msg: string) => void;
   onClose?: () => void;
 }
@@ -39,6 +42,8 @@ export class ConsultSocket {
           case 'analysis': ev.onAnalysis?.(m); break;
           case 'draft_ready': ev.onDraft?.(m); break;
           case 'refined': ev.onRefined?.(m); break;
+          case 'confidence_update': ev.onConfidenceUpdate?.(m); break;
+          case 'mode_switch': ev.onModeSwitch?.(m); break;
           case 'error': ev.onError?.(m.message); break;
         }
       };

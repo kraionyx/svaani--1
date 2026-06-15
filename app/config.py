@@ -68,6 +68,24 @@ class Settings(BaseSettings):
     # to the staged path automatically on any error. Set False to force the staged path.
     single_pass_llm: bool = True
 
+    # ── Conversation intelligence (Goals 1-5) ───────────────────────────────
+    # Resolve speaker relationships + the referenced patient ("patient = son, not the
+    # mother who is speaking"). Deterministic cue rules always run; an LLM sharpens them
+    # when configured. Off => legacy behaviour (speaker order = roles).
+    resolve_subjects: bool = True
+    # Complexity score above which a consult is flagged Complex (Goal 2) and Auto mode
+    # escalates to batch (Goal 3).
+    complexity_threshold: float = 0.6
+    # Auto mode: let complexity choose real-time vs batch instead of a fixed mode (Goal 3).
+    auto_inference_mode: bool = False
+    # Default mode when auto is off ('realtime' | 'batch').
+    default_inference_mode: str = "realtime"
+    # Confidence-band thresholds for the accuracy indicator (Goal 4).
+    confidence_high_threshold: float = 0.9
+    confidence_moderate_threshold: float = 0.75
+    # AI consultation editor (Goal 11) — natural-language section edits, preview-then-apply.
+    ai_edit_enabled: bool = True
+
     # ── Validation thresholds ────────────────────────────────────────────────
     stt_low_confidence_threshold: float = 0.6
     drop_ungrounded_fields: bool = True        # False => ungrounded items flagged, not dropped
@@ -77,10 +95,18 @@ class Settings(BaseSettings):
     narrative_notes: bool = True
 
     # ── Persistence ──────────────────────────────────────────────────────────
-    # 'memory' (default, in-process) or 'sqlite' (durable, PHI encrypted at rest via
-    # FieldCipher). Sessions survive restarts when 'sqlite'.
+    # 'memory' (default, in-process), 'sqlite' (durable, PHI encrypted at rest via
+    # FieldCipher), or 'supabase' (durable Postgres; PHI still encrypted at rest in
+    # *_enc columns). Sessions survive restarts when 'sqlite'/'supabase'.
     store_backend: str = "memory"
     sqlite_path: str = "svaani.db"
+    # Supabase (Postgres) backend. Prefer the POOLER connection string (the small demo
+    # instance caps total connections). Server-side only — never expose to the browser.
+    # Schema lives in supabase/schema.sql.
+    supabase_db_url: str = ""                  # postgresql://...:6543/postgres (pooler)
+    supabase_url: str = ""                     # https://<ref>.supabase.co (for future PostgREST use)
+    supabase_service_key: str = ""             # service_role JWT (server-side only; bypasses RLS)
+    supabase_pool_max: int = 5                 # max pooled connections held by the app
 
     # ── Auth ─────────────────────────────────────────────────────────────────
     # 'dev' keeps the header scaffold (X-User-Id / X-Role); 'jwt' requires a verified

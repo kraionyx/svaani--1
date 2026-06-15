@@ -28,9 +28,24 @@ CLEAN_INSTRUCTION = (
     "Log every change in `corrections`. Do not add, summarize, infer, or remove content."
 )
 
+RELATIONSHIP_INSTRUCTION = (
+    "Determine WHO the consultation is clinically ABOUT before anything else. The patient "
+    "is the person whose symptoms/history are described — NOT necessarily the person "
+    "speaking. A parent, spouse, guardian, or translator often speaks ON BEHALF of the "
+    "patient (e.g. 'my son has had fever' => the patient is the son, the speaker is the "
+    "mother/caregiver; 'I am speaking for my father' => patient is the father).\n"
+    "- Set `referenced_patient` to a short label for that person (e.g. 'son', 'father', "
+    "'wife', or 'patient' when the speaker is describing their own symptoms).\n"
+    "- NEVER attribute a caregiver's own identity to the patient. Attribute every symptom, "
+    "history, and finding to the referenced patient.\n"
+    "- This is grounded like everything else: base it only on what was actually said."
+)
+
 EXTRACT_INSTRUCTION = (
     "Extract the clinical entities that were MENTIONED in the transcript into the schema. "
     "Attach provenance span ids to every item; if you cannot cite a span, do not output it.\n"
+    "Set `referenced_patient` to WHO the complaints are about (the person discussed, not "
+    "necessarily the speaker; 'patient' if the speaker describes their own symptoms).\n"
     "MEDICATIONS (safety-critical): capture each under `medications_discussed` exactly as "
     "spoken. Copy `dose`, `route`, `frequency`, and `duration` VERBATIM from the transcript — "
     "NEVER normalize, round, or substitute a 'typical' or 'standard' value, and NEVER rename "

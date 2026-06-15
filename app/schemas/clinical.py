@@ -78,6 +78,10 @@ class ClinicalExtraction(BaseModel):
     """Output 3 — structured, grounded record of what the consultation contained."""
 
     session_id: str
+    # WHO the complaints are ABOUT. The patient is the person discussed, not necessarily
+    # the speaker — e.g. a mother describing her son's fever => referenced_patient='son'.
+    # Set by relationship resolution (app.pipeline.subjects); never assume speaker=patient.
+    referenced_patient: str | None = None
     patient_information: dict[str, Any] = Field(default_factory=dict)
     chief_complaints: list[ChiefComplaint] = Field(default_factory=list)
     history_of_present_illness: GroundedText | None = None

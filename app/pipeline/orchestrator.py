@@ -15,11 +15,14 @@ from app.config import Settings, get_settings
 from app.llm.base import MedicalLLM, get_llm
 from app.pipeline.clean import clean_transcript
 from app.pipeline.combined import analyze_consultation
+from app.pipeline.complexity import assess_complexity
 from app.pipeline.extract import extract_clinical
 from app.pipeline.narrate import narrate_note
 from app.pipeline.note import generate_note
 from app.pipeline.risk import assess_risk, llm_risk_markers
+from app.pipeline.subjects import resolve_relationships
 from app.schemas.clinical import ClinicalExtraction
+from app.schemas.intelligence import ConversationProfile
 from app.schemas.note import ConsultationNote
 from app.schemas.risk import RiskAssessment
 from app.schemas.template import TemplateDefinition
@@ -34,6 +37,9 @@ class PipelineResult(BaseModel):
     grounding: GroundingReport
     note: ConsultationNote
     risk: RiskAssessment
+    # Goal 1/2/4 — who is in the room, complexity, and confidence. None when subject
+    # resolution is disabled. Never carries clinical content.
+    profile: ConversationProfile | None = None
 
 
 logger = logging.getLogger("svaani.pipeline")
@@ -81,6 +87,17 @@ def run_pipeline(
 
     clean, extraction, risk_markers = _analyze(raw, llm, settings)
 
+    # Goal 1: resolve WHO the consult is about before grounding the note, so symptoms
+    # are attributed to the referenced patient (e.g. 'son') and not the speaker (mother).
+    profile: ConversationProfile | None = None
+    if settings.resolve_subjects:
+        profile = resolve_relationships(clean if clean.segments else raw, llm)
+        assess_complexity(profile, clean if clean.segments else raw, settings)
+        # The LLM extraction may set referenced_patient itself; otherwise adopt the
+        # resolver's answer so the note always knows whose record this is.
+        if not extraction.referenced_patient and profile.referenced_patient:
+            extraction.referenced_patient = profile.referenced_patient
+
     valid_spans = raw.segment_ids() | clean.segment_ids()
     extraction, grounding = ground_extraction(
         extraction, valid_spans, drop=settings.drop_ungrounded_fields
@@ -99,7 +116,8 @@ def run_pipeline(
     risk = assess_risk(clean, extraction, llm, settings, llm_markers=risk_markers)
 
     return PipelineResult(
-        clean=clean, extraction=extraction, grounding=grounding, note=note, risk=risk
+        clean=clean, extraction=extraction, grounding=grounding, note=note, risk=risk,
+        profile=profile,
     )
 
 
@@ -109,6 +127,7 @@ def rebuild_from_extraction(
     clean: CleanTranscript | None,
     risk: RiskAssessment,
     settings: Settings,
+    profile: ConversationProfile | None = None,
 ) -> PipelineResult:
     """Re-derive grounding + note from a DOCTOR-EDITED extraction (no LLM call).
 
@@ -126,5 +145,5 @@ def rebuild_from_extraction(
     note = generate_note(extraction, template)
     return PipelineResult(
         clean=clean or CleanTranscript(session_id=extraction.session_id),
-        extraction=extraction, grounding=grounding, note=note, risk=risk,
+        extraction=extraction, grounding=grounding, note=note, risk=risk, profile=profile,
     )

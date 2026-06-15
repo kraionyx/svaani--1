@@ -89,3 +89,117 @@ export async function uploadAudio(sid: string, file: Blob, name = 'consult.wav')
 }
 export function exportUrl(sid: string, fmt: string) { return `${API_BASE}/sessions/${sid}/export/${fmt}`; }
 export { headers as authHeaders };
+
+// ── Intelligence / profile types ─────────────────────────────────────────────
+export interface SpeakerProfile {
+  speaker_label: string;
+  role: string;
+  relationship: string;
+  subject_patient?: string | null;
+  span_ids?: string[];
+  confidence: number;
+}
+export interface ConversationProfile {
+  session_id: string;
+  inference_mode?: string | null;
+  kind: string;
+  speakers: SpeakerProfile[];
+  speaker_count: number;
+  referenced_patient?: string | null;
+  complexity_score: number;
+  is_complex: boolean;
+  confidence_band: 'high' | 'moderate' | 'low';
+  confidence_pct: number;
+  confidence_reasons: string[];
+  complexity_signals: string[];
+}
+
+// ── Review / admin / ops types ─────────────────────────────────────────────
+export interface ReviewPayload {
+  rating: 'helpful' | 'needs_improvement';
+  error_categories?: string[];
+  comment?: string | null;
+}
+export interface AdminReviewEntry {
+  review: any;
+  admin_review: { id: string; status: string; admin_notes?: string | null; created_at: string; assigned_to?: string | null };
+}
+export interface ImprovementItem {
+  id: string; stage: string; review_id: string; created_at: string;
+  candidate_prompt?: string | null; eval_results?: any; approved_by?: string | null;
+}
+export interface PromptVersion {
+  id: string; name: string; version: number; content: string; content_hash: string;
+  active: boolean; created_at: string; created_by?: string | null;
+}
+
+// ── Document types ────────────────────────────────────────────────────────
+export interface RenderedDocument {
+  id: string; session_id: string; doc_type: string; status: string;
+  rendered_html: string; edited_html?: string | null;
+  approved_at?: string | null; approved_by?: string | null;
+}
+
+// ── AI editor types ───────────────────────────────────────────────────────
+export interface AiEditChange { section_id: string; before?: string; after?: string; content_text?: string; }
+export interface EditEntry {
+  seq: number; section_id: string; before: string; after: string;
+  instruction: string; applied: boolean; undone?: boolean;
+}
+
+// ── New API calls ─────────────────────────────────────────────────────────
+export const getProfile = (sid: string) => api<ConversationProfile>(`/sessions/${sid}/profile`);
+
+export const patchSpeakers = (sid: string, body: {
+  corrections: { speaker_label: string; role?: string; relationship?: string; subject_patient?: string }[];
+  referenced_patient?: string;
+}) => api<{ session_id: string; referenced_patient: string | null; speakers: SpeakerProfile[]; note: Note | null }>(
+  `/sessions/${sid}/speakers`, { ...jsonBody(body), method: 'PATCH' }
+);
+
+export const submitReview = (sid: string, body: ReviewPayload) =>
+  api<{ review_id: string; rating: string }>(`/sessions/${sid}/review`, jsonBody(body));
+
+export const getAdminReviews = (status?: string) =>
+  api<AdminReviewEntry[]>(`/admin/reviews${status ? `?status=${status}` : ''}`);
+
+export const patchAdminReview = (id: string, body: { status: string; admin_notes?: string }) =>
+  api(`/admin/reviews/${id}`, { ...jsonBody(body), method: 'PATCH' });
+
+export const getImprovements = (stage?: string) =>
+  api<ImprovementItem[]>(`/admin/improvements${stage ? `?stage=${stage}` : ''}`);
+
+export const advanceImprovement = (id: string, body: { candidate_prompt?: string; reject?: boolean } = {}) =>
+  api<ImprovementItem>(`/admin/improvements/${id}/advance`, jsonBody(body));
+
+export const getPrompts = (name?: string) => api<PromptVersion[]>(`/prompts${name ? `?name=${name}` : ''}`);
+
+export const createPrompt = (body: { name: string; content: string; activate?: boolean }) =>
+  api<PromptVersion>('/prompts', jsonBody(body));
+
+export const activatePrompt = (id: string) => api<PromptVersion>(`/prompts/${id}/activate`, { method: 'POST' });
+
+export const aiEditPreview = (sid: string, body: { instruction: string }) =>
+  api<{ instruction: string; changes: AiEditChange[] }>(`/sessions/${sid}/ai-edit`, jsonBody(body));
+
+export const aiEditApply = (sid: string, body: { instruction: string; changes: { section_id: string; content_text: string }[] }) =>
+  api<{ session_id: string; state: string; note: Note }>(`/sessions/${sid}/ai-edit/apply`, jsonBody(body));
+
+export const getEdits = (sid: string) => api<EditEntry[]>(`/sessions/${sid}/edits`);
+
+export const documentPreview = (sid: string, body: { doc_type: string; branding?: Record<string, string> }) =>
+  api<RenderedDocument>(`/sessions/${sid}/document/preview`, jsonBody(body));
+
+export const updateDocument = (docId: string, body: { edited_html: string }) =>
+  api<RenderedDocument>(`/documents/${docId}`, { ...jsonBody(body), method: 'PUT' });
+
+export const approveDocument = (docId: string) =>
+  api<RenderedDocument>(`/documents/${docId}/approve`, { method: 'POST' });
+
+export const listSessionDocuments = (sid: string) => api<RenderedDocument[]>(`/sessions/${sid}/documents`);
+
+export const getFeatureFlags = () =>
+  api<{ config: Record<string, any>; runtime: { key: string; enabled: boolean; value: any }[] }>('/feature-flags');
+
+export const setFeatureFlag = (body: { key: string; enabled: boolean }) =>
+  api<{ key: string; enabled: boolean }>('/feature-flags', jsonBody(body));

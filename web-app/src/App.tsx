@@ -13,6 +13,13 @@ import { GroundingPanel } from './components/GroundingPanel';
 import { TranscriptView } from './components/TranscriptView';
 import { SignOff } from './components/SignOff';
 import { NotificationsSidebar, type Notification } from './components/NotificationsSidebar';
+import { ConfidenceChip } from './components/ConfidenceChip';
+import { NoticeBanner } from './components/NoticeBanner';
+import { SpeakerTimeline } from './components/SpeakerTimeline';
+import { ReviewPrompt } from './components/ReviewPrompt';
+import { AiEditor } from './components/AiEditor';
+import { PrescriptionPreview } from './components/PrescriptionPreview';
+import { AdminDashboard } from './components/AdminDashboard';
 
 const THEMES = ['mint', 'white', 'dark'];
 
@@ -73,6 +80,12 @@ export function App() {
         },
         // Refine pass: diarized transcript + sharpened outputs — re-fetch everything.
         onRefined: async (r) => { await loadOutputs(r.session_id); toast('Refined with speaker labels.'); },
+        // Intelligence events (Goals 4 & 5).
+        onConfidenceUpdate: (c) => s.set({
+          confidenceBand: c.confidence_band as any,
+          confidenceReasons: c.confidence_reasons,
+        }),
+        onModeSwitch: (m) => s.set({ modeNotice: m }),
         onError: (msg) => { toast(msg, true); s.set({ recording: false, busy: false }); },
       });
       s.set({ sessionId: sid, recording: true, activeTab: 'transcript' });
@@ -127,10 +140,22 @@ export function App() {
   return (
     <div className="shell" style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', width: '100%' }}>
       <header className="topbar">
-        <div className="brand"><b>Svaani.</b><span className="sub">AI Medical Scribe</span></div>
+        <div className="brand">
+          <span className="logo">𝓢</span>
+          <div className="brand-id">
+            <b>Svaani<span className="dot">.</span></b>
+            <span className="sub">AI Medical Scribe</span>
+          </div>
+          <svg className="ekg" viewBox="0 0 132 24" aria-hidden="true" focusable="false">
+            <path d="M0 12 H46 l3.5 -8 l4.5 16 l4 -13 l3 5 H78 l3.5 -10 l4.5 18 l3 -8 H132" />
+          </svg>
+        </div>
         <div className="topctrls">
           <span className={`pill ${s.health?.sarvam === 'live' ? 'live' : 'mock'}`}><span className="d" />STT: {s.health?.sarvam || '…'}</span>
           <span className={`pill ${s.health?.vertex === 'live' ? 'live' : 'mock'}`}><span className="d" />LLM: {s.health?.vertex || '…'}</span>
+          {s.confidenceBand && (
+            <ConfidenceChip band={s.confidenceBand} reasons={s.confidenceReasons} />
+          )}
           <label className="ctrl">role
             <select value={s.role} onChange={(e) => { s.set({ role: e.target.value }); API.setRole(e.target.value); }}>
               <option value="doctor">doctor</option><option value="scribe">scribe</option><option value="admin">admin</option>
@@ -149,6 +174,8 @@ export function App() {
           </div>
         </div>
       </header>
+
+      <NoticeBanner notice={s.modeNotice} onDismiss={() => s.set({ modeNotice: null })} />
 
       <div style={{ display: 'flex', flexDirection: 'row', flex: 1, width: '100%' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -173,15 +200,21 @@ export function App() {
               </div>
             ) : (
               <div className="center-container" style={{ maxWidth: '1200px', width: '100%', marginTop: 'var(--space-md)' }}>
-
+                {s.sessionId && !s.reviewSubmitted && s.reviewState && !['listening', 'processing'].includes(s.reviewState) && (
+                  <ReviewPrompt sessionId={s.sessionId} onSubmit={() => s.set({ reviewSubmitted: true })} />
+                )}
                 <section className="right" style={{ padding: 0 }}>
-                  <Tabs active={s.activeTab} onTab={(t) => s.set({ activeTab: t })} />
+                  <Tabs active={s.activeTab} onTab={(t) => s.set({ activeTab: t })} role={s.role} />
                   <div className="tabbody">
                     {s.activeTab === 'note' && <NoteView />}
                     {s.activeTab === 'risk' && <RiskPanel />}
                     {s.activeTab === 'extraction' && <ExtractionEditor />}
                     {s.activeTab === 'transcript' && <TranscriptView />}
                     {s.activeTab === 'grounding' && <GroundingPanel />}
+                    {s.activeTab === 'speakers' && <SpeakerTimeline />}
+                    {s.activeTab === 'ai-edit' && <AiEditor />}
+                    {s.activeTab === 'prescription' && <PrescriptionPreview />}
+                    {s.activeTab === 'admin' && <AdminDashboard />}
                   </div>
                 </section>
               </div>

@@ -46,10 +46,15 @@ def get_store() -> SessionStore:
     if _store is None:
         from app.config import get_settings
 
-        if get_settings().store_backend == "sqlite":
+        backend = get_settings().store_backend
+        if backend == "sqlite":
             from app.store_sql import SqlSessionStore
 
             _store = SqlSessionStore(get_settings())
+        elif backend == "supabase":
+            from app.store_supabase import SupabaseSessionStore
+
+            _store = SupabaseSessionStore(get_settings())
         else:
             _store = SessionStore()
     return _store

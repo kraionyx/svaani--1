@@ -13,6 +13,9 @@ from pydantic import BaseModel, Field
 class SpeakerRole(str, Enum):
     DOCTOR = "doctor"
     PATIENT = "patient"
+    CAREGIVER = "caregiver"   # parent/spouse/guardian speaking for the patient
+    NURSE = "nurse"
+    TRANSLATOR = "translator"
     OTHER = "other"
     UNKNOWN = "unknown"
 

@@ -28,6 +28,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app.config import Settings
 from app.llm.base import get_llm
+from app.pipeline.inference_mode import decide_mode, is_batch, mode_switch_notice
 from app.pipeline.narrate import stream_section_prose
 from app.pipeline.orchestrator import run_pipeline
 from app.schemas.session import ConsultationSession, ReviewState
@@ -271,7 +272,23 @@ async def _emit_pass(
     session.extraction = result.extraction
     session.note = result.note
     session.risk = result.risk
+    session.conversation_profile = result.profile
     session.template_version = template.version
+
+    # Goals 3/4/5: resolve the authoritative real-time/batch mode, surface the
+    # confidence indicator, and (in Auto mode on a complex consult) the notice banner.
+    if result.profile is not None:
+        mode = decide_mode(result.profile, settings)
+        session.inference_mode = mode.value
+        await websocket.send_json({
+            "type": "confidence_update", "session_id": session.session_id,
+            "inference_mode": mode.value, **result.profile.summary(),
+        })
+        if not refine and is_batch(mode) and result.profile.is_complex:
+            await websocket.send_json({
+                **mode_switch_notice(result.profile, mode),
+                "session_id": session.session_id,
+            })
     store.set_result(session.session_id, result)
 
     if refine:

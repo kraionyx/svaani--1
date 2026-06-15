@@ -11,6 +11,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from app.schemas.clinical import ClinicalExtraction
+from app.schemas.intelligence import ConversationProfile
 from app.schemas.note import ConsultationNote
 from app.schemas.risk import RiskAssessment
 from app.schemas.transcript import CleanTranscript, RawTranscript
@@ -59,6 +60,14 @@ class ConsultationSession(BaseModel):
     signed_by_name: str | None = None
     signature_image: str | None = None
     signed_at: datetime | None = None
+
+    # Conversation intelligence (Goals 1-4). Who is in the room, complexity, confidence,
+    # and the chosen real-time/batch mode. Not clinical content.
+    conversation_profile: ConversationProfile | None = None
+    inference_mode: str | None = None
+    # Versioning (Goal 10) — the prompt/model that produced this consult, for rollback/audit.
+    model_version: str | None = None
+    prompt_version: str | None = None
 
     # Outputs (populated as the pipeline runs).
     raw_transcript: RawTranscript | None = None
