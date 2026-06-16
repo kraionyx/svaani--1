@@ -82,6 +82,10 @@ class ClinicalExtraction(BaseModel):
     # the speaker — e.g. a mother describing her son's fever => referenced_patient='son'.
     # Set by relationship resolution (app.pipeline.subjects); never assume speaker=patient.
     referenced_patient: str | None = None
+    # All distinct people referenced when a consult is about more than one patient
+    # (e.g. a parent describing two children). Labels mirror ConversationProfile;
+    # the first is the primary (== referenced_patient). Empty for single-patient consults.
+    referenced_subjects: list[str] = Field(default_factory=list)
     patient_information: dict[str, Any] = Field(default_factory=dict)
     chief_complaints: list[ChiefComplaint] = Field(default_factory=list)
     history_of_present_illness: GroundedText | None = None

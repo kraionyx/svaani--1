@@ -33,13 +33,13 @@ logger = logging.getLogger("svaani.store")
 _UPSERT = """
 insert into consultations
   (session_id, patient_ref, template_id, template_version, state,
-   conversation_kind, complexity_score, is_complex, inference_mode, speaker_count,
+   conversation_kind, complexity_score, is_complex, inference_mode, auto_mode, speaker_count,
    audio_confidence, confidence_band, referenced_patient, model_version, prompt_version,
    signed_by_name, signed_at, session_enc, result_enc)
 values (%(session_id)s, %(patient_ref)s, %(template_id)s, %(template_version)s, %(state)s,
         %(conversation_kind)s, %(complexity_score)s, %(is_complex)s, %(inference_mode)s,
-        %(speaker_count)s, %(audio_confidence)s, %(confidence_band)s, %(referenced_patient)s,
-        %(model_version)s, %(prompt_version)s,
+        %(auto_mode)s, %(speaker_count)s, %(audio_confidence)s, %(confidence_band)s,
+        %(referenced_patient)s, %(model_version)s, %(prompt_version)s,
         %(signed_by_name)s, %(signed_at)s, %(session_enc)s, %(result_enc)s)
 on conflict (session_id) do update set
   patient_ref       = excluded.patient_ref,
@@ -50,6 +50,7 @@ on conflict (session_id) do update set
   complexity_score  = excluded.complexity_score,
   is_complex        = excluded.is_complex,
   inference_mode    = excluded.inference_mode,
+  auto_mode         = excluded.auto_mode,
   speaker_count     = excluded.speaker_count,
   audio_confidence  = excluded.audio_confidence,
   confidence_band   = excluded.confidence_band,
@@ -107,6 +108,7 @@ class SupabaseSessionStore(SessionStore):
             "complexity_score": prof.complexity_score if prof else None,
             "is_complex": prof.is_complex if prof else False,
             "inference_mode": session.inference_mode or "realtime",
+            "auto_mode": session.auto_mode,
             "speaker_count": prof.speaker_count if prof else 0,
             "audio_confidence": prof.audio_confidence if prof else None,
             "confidence_band": prof.confidence_band.value if prof else None,

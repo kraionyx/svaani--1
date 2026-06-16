@@ -6,7 +6,23 @@ interface Props {
   onTemplate: (t: string) => void;
   onRecord: () => void; onSimulate: () => void; onUpload: (f: File) => void;
   analyser: AnalyserNode | null;
+  modeChoice: 'realtime' | 'batch' | 'auto' | 'hybrid';
+  onModeChoice: (v: 'realtime' | 'batch' | 'auto' | 'hybrid') => void;
 }
+
+type ModeId = 'realtime' | 'hybrid' | 'batch' | 'auto';
+const MODE_OPTIONS: { id: ModeId; label: string }[] = [
+  { id: 'realtime', label: 'Real-time' },
+  { id: 'hybrid', label: 'Hybrid' },
+  { id: 'batch', label: 'Batch' },
+  { id: 'auto', label: 'Auto' },
+];
+const MODE_HINT: Record<ModeId, string> = {
+  realtime: 'Fastest — note streams live; no speaker separation.',
+  hybrid: 'Best balance — instant draft, then always sharpens to full speaker-labeled accuracy.',
+  batch: 'Most accurate — full speaker labels; note is produced after you stop.',
+  auto: 'AI decides — keeps the live draft for simple consults, sharpens only when complex.',
+};
 
 export function Recorder(p: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -47,6 +63,22 @@ export function Recorder(p: Props) {
               : 'Ready — press record to start.'}
         </div>
       </div>
+
+      <label className="lbl">Inference mode</label>
+      <div className="mode-seg" role="group" aria-label="Inference mode">
+        {MODE_OPTIONS.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            className={p.modeChoice === m.id ? 'active' : ''}
+            disabled={p.recording || p.busy}
+            onClick={() => p.onModeChoice(m.id)}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+      <p className="hint" style={{ marginTop: 6 }}>{MODE_HINT[p.modeChoice]}</p>
 
       <button className={`btn big ${p.recording ? 'danger' : ''}`} onClick={p.onRecord} disabled={p.busy && !p.recording}>
         {p.recording ? '■ Stop & finalize' : '● Record consultation'}

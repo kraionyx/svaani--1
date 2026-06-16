@@ -27,6 +27,26 @@
   --accent:#1ec7b1; --accent-strong:#16b6a1; --accent-soft:rgba(30,199,177,.16); --accent-glow:rgba(30,199,177,.22);
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 26px -14px rgba(0,0,0,.6); --shadow-lg:0 30px 80px -24px rgba(0,0,0,.7); }
 
+/* User-built theme. The four base colors (--bg/--surface/--ink/--accent) are set inline on
+   <html> by the Theme Studio; everything else is DERIVED from them here via color-mix, so a
+   single set of picks recolors the whole app coherently in either a light or dark direction.
+   The values below are seed defaults used until the user picks (overridden by the inline vars). */
+[data-theme=custom] {
+  --bg:#eef1f7; --surface:#ffffff; --ink:#16202b; --accent:#6d5ae6;
+  --surface-2: color-mix(in srgb, var(--surface) 94%, var(--ink));
+  --surface-3: color-mix(in srgb, var(--surface) 87%, var(--ink));
+  --border:    color-mix(in srgb, var(--surface) 80%, var(--ink));
+  --border-soft: color-mix(in srgb, var(--surface) 89%, var(--ink));
+  --muted:     color-mix(in srgb, var(--ink) 55%, var(--surface));
+  --heading:   color-mix(in srgb, var(--ink) 94%, #000);
+  --paper:     color-mix(in srgb, var(--surface) 97%, var(--ink));
+  --accent-strong: color-mix(in srgb, var(--accent) 82%, #000);
+  --accent-deep:   color-mix(in srgb, var(--accent) 62%, #000);
+  --accent-ink:    #fff;
+  --accent-soft:   color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-glow:   color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
 /* ── Reset & base ────────────────────────────────────────────────────────── */
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -220,6 +240,13 @@ ul { margin: 6px 0; padding-left: 20px; } li { margin: 4px 0; }
 .conf-chip.low { color: var(--high); border-color: var(--high); background: color-mix(in srgb, var(--high) 9%, transparent); }
 .conf-chip.low .dot { background: var(--high); }
 
+/* ── Inference mode selector (Goal 3) ───────────────────────────────────── */
+.mode-seg { display: flex; gap: 4px; margin: 4px 0 2px; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--border) 18%, transparent); }
+.mode-seg button { flex: 1; border: 0; background: transparent; padding: 7px 6px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); cursor: pointer; transition: all .15s var(--ease); }
+.mode-seg button:hover:not(:disabled) { color: var(--heading); }
+.mode-seg button.active { background: var(--accent); color: #fff; box-shadow: var(--shadow-sm); }
+.mode-seg button:disabled { opacity: .55; cursor: default; }
+
 /* ── Notice banner (Goal 5) ─────────────────────────────────────────────── */
 .notice-banner { display: flex; align-items: center; gap: 10px; padding: 10px 22px; font-size: 13px; background: var(--gold-soft); border-bottom: 1px solid color-mix(in srgb, var(--gold) 35%, transparent); color: #936b12; animation: drop .5s var(--ease) both; }
 [data-theme=dark] .notice-banner { color: var(--gold); background: color-mix(in srgb, var(--gold) 14%, transparent); }
@@ -233,6 +260,49 @@ ul { margin: 6px 0; padding-left: 20px; } li { margin: 4px 0; }
 /* ── AI editor (Goal 11) ────────────────────────────────────────────────── */
 .ai-proposal { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 13px; margin-bottom: 10px; }
 .ai-proposal h4 { margin: 0 0 8px; font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--accent-strong); }
+.ai-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 12px; }
+.ai-before { color: var(--muted); white-space: pre-wrap; line-height: 1.5; }
+.ai-after { white-space: pre-wrap; line-height: 1.5; }
+
+/* Per-tab AI bot: a small robot icon in each editable panel header that opens a prompt popover. */
+.panel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.panel-head h2 { margin: 0; flex: 1; }
+.ai-bot-wrap { position: relative; display: inline-flex; }
+.ai-bot-wrap.push { margin-left: auto; }
+.ai-bot {
+  display: grid; place-items: center; width: 34px; height: 34px; padding: 0; cursor: pointer;
+  color: var(--accent-strong); background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 10px;
+  transition: transform .12s var(--ease), box-shadow .15s, background .15s, color .15s;
+}
+.ai-bot:hover { transform: translateY(-1px); background: color-mix(in srgb, var(--accent) 18%, var(--surface)); box-shadow: 0 6px 16px -8px var(--accent-glow); }
+.ai-bot.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; box-shadow: 0 6px 16px -8px var(--accent-glow); }
+.ai-pop {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 60; width: min(420px, 86vw);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); padding: 15px; animation: pop .16s var(--ease) both;
+}
+@keyframes pop { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
+.ai-pop-h { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ai-pop-title { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent-strong); flex: 1; }
+.ai-pop-x { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 4px; border-radius: 6px; }
+.ai-pop-x:hover { color: var(--ink); background: var(--surface-3); }
+.ai-pop-preview { margin-top: 12px; max-height: 320px; overflow: auto; }
+
+/* ── Custom theme studio ────────────────────────────────────────────────── */
+.theme-studio {
+  position: fixed; top: 70px; right: 18px; z-index: 80; width: min(340px, 92vw);
+  box-shadow: var(--shadow-lg); animation: pop .18s var(--ease) both;
+}
+.theme-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+.theme-row:last-of-type { border-bottom: 0; }
+.theme-row input[type=color] {
+  width: 46px; height: 34px; padding: 2px; border: 1px solid var(--border); border-radius: 9px;
+  background: var(--surface); cursor: pointer; flex-shrink: 0;
+}
+.theme-meta { display: flex; flex-direction: column; flex: 1; line-height: 1.25; }
+.theme-name { font-weight: 600; font-size: 13px; }
+.theme-hex { font-family: var(--font-mono); font-size: 11px; color: var(--muted); letter-spacing: .3px; }
 
 /* ── Prescription / document preview ────────────────────────────────────── */
 .px-status { display: inline-block; font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; padding: 3px 9px; border-radius: 6px; }

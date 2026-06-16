@@ -18,13 +18,44 @@ from app.schemas.intelligence import ConversationProfile
 from app.schemas.review import InferenceMode
 
 
-def decide_mode(profile: ConversationProfile | None, settings: Settings) -> InferenceMode:
-    """Resolve the authoritative inference mode for a consult."""
-    if settings.auto_inference_mode:
+def decide_mode(
+    profile: ConversationProfile | None,
+    settings: Settings,
+    *,
+    auto: bool | None = None,
+    manual: str | None = None,
+) -> InferenceMode:
+    """Resolve the authoritative inference mode for a consult (Goal 3).
+
+    Precedence, per the doctor's pre-consult choice:
+      • ``auto`` (Auto AI Mode): the complexity classifier picks — simple → realtime,
+        complex → batch. When ``auto`` is ``None`` we fall back to the server-wide
+        ``auto_inference_mode`` default.
+      • ``manual`` ("realtime" | "batch"): the doctor's explicit pick, used when auto is off.
+      • otherwise the server-wide ``default_inference_mode``.
+    """
+    use_auto = settings.auto_inference_mode if auto is None else auto
+    if use_auto:
         if profile is not None and profile.is_complex:
             return InferenceMode.AUTO_BATCH
         return InferenceMode.AUTO_REALTIME
+    if manual == "hybrid":
+        return InferenceMode.HYBRID
+    if manual == "batch":
+        return InferenceMode.BATCH
+    if manual == "realtime":
+        return InferenceMode.REALTIME
     return InferenceMode.BATCH if settings.default_inference_mode == "batch" else InferenceMode.REALTIME
+
+
+def split_mode_choice(mode: str | None, *, legacy_auto: bool = False) -> tuple[bool, str]:
+    """Map a pre-consult mode choice → (auto_mode, manual_mode).
+
+    ``mode`` is one of 'auto' | 'realtime' | 'batch' | 'hybrid'. ``legacy_auto`` is the older
+    boolean form, used only when ``mode`` is omitted.
+    """
+    choice = (mode or ("auto" if legacy_auto else "realtime")).lower()
+    return choice == "auto", (choice if choice in ("realtime", "batch", "hybrid") else "realtime")
 
 
 def is_batch(mode: InferenceMode) -> bool:

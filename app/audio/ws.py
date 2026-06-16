@@ -28,12 +28,21 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app.config import Settings
 from app.llm.base import get_llm
-from app.pipeline.inference_mode import decide_mode, is_batch, mode_switch_notice
+from app.pipeline.complexity import assess_complexity
+from app.pipeline.inference_mode import (
+    decide_mode,
+    mode_switch_notice,
+    split_mode_choice,
+)
 from app.pipeline.narrate import stream_section_prose
 from app.pipeline.orchestrator import run_pipeline
+from app.pipeline.subjects import resolve_relationships
+from app.schemas.intelligence import ConversationProfile
+from app.schemas.review import InferenceMode
 from app.schemas.session import ConsultationSession, ReviewState
 from app.schemas.transcript import RawTranscript
 from app.stt import sarvam_stream
+from app.stt.doctor_detect import assign_clinical_roles
 from app.stt.sarvam import get_stt
 from app.store import SessionStore
 from app.templates.registry import get_registry
@@ -132,8 +141,13 @@ async def consultation_ws(websocket: WebSocket, store: SessionStore, settings: S
             if action == "start":
                 sid = data.get("session_id") or f"sess-{uuid.uuid4().hex[:12]}"
                 template_id = data.get("template_id", "soap")
+                # Goal 3: per-consult mode choice (auto | realtime | batch).
+                auto_mode, manual_mode = split_mode_choice(
+                    data.get("mode"), legacy_auto=bool(data.get("auto", False))
+                )
                 session = ConsultationSession(
-                    session_id=sid, template_id=template_id, state=ReviewState.LISTENING
+                    session_id=sid, template_id=template_id, state=ReviewState.LISTENING,
+                    auto_mode=auto_mode, manual_mode=manual_mode,
                 )
                 store.create(session)
                 buffer.clear()
@@ -275,20 +289,15 @@ async def _emit_pass(
     session.conversation_profile = result.profile
     session.template_version = template.version
 
-    # Goals 3/4/5: resolve the authoritative real-time/batch mode, surface the
-    # confidence indicator, and (in Auto mode on a complex consult) the notice banner.
+    # Goals 3/4: stamp the authoritative real-time/batch label and surface the confidence
+    # indicator. The Auto-escalation banner is emitted by _finalize (the moment it switches).
     if result.profile is not None:
-        mode = decide_mode(result.profile, settings)
+        mode = decide_mode(result.profile, settings, auto=session.auto_mode, manual=session.manual_mode)
         session.inference_mode = mode.value
         await websocket.send_json({
             "type": "confidence_update", "session_id": session.session_id,
             "inference_mode": mode.value, **result.profile.summary(),
         })
-        if not refine and is_batch(mode) and result.profile.is_complex:
-            await websocket.send_json({
-                **mode_switch_notice(result.profile, mode),
-                "session_id": session.session_id,
-            })
     store.set_result(session.session_id, result)
 
     if refine:
@@ -327,6 +336,18 @@ async def _emit_pass(
     })
 
 
+def _diarized_profile(diar: RawTranscript, settings: Settings) -> ConversationProfile:
+    """Resolve speaker roles + complexity on the DIARIZED transcript (rule-based, no LLM).
+
+    Auto mode uses this to decide "is this consult complex?" — the live transcript can't be
+    judged because streaming STT produces no speaker labels.
+    """
+    assign_clinical_roles(diar)
+    profile = resolve_relationships(diar, None)
+    assess_complexity(profile, diar, settings)
+    return profile
+
+
 async def _finalize(
     websocket: WebSocket,
     store: SessionStore,
@@ -335,8 +356,13 @@ async def _finalize(
     pcm: bytes,
     live_segments: list[tuple[str, str]],
 ) -> None:
-    """On stop: hybrid fast-then-refine. Generate from the live transcript immediately,
-    then re-generate from the accurate diarized transcript when it's ready."""
+    """On stop: run the flow for the doctor's per-consult mode (Goal 3).
+
+    • real-time → live draft only (no diarization);
+    • batch     → one accurate diarized pass (no live draft note);
+    • hybrid    → live draft now, then ALWAYS diarize + refine (best balance);
+    • auto      → live draft now, then diarize and replace it only if the consult is complex.
+    """
     session.transition(ReviewState.PROCESSING)
     await websocket.send_json(
         {"type": "stage_update", "stage": "processing", "session_id": session.session_id}
@@ -346,21 +372,49 @@ async def _finalize(
         live_raw = sarvam_stream.raw_from_segments(session.session_id, live_segments)
         have_live = _has_text(live_raw)
 
-        if settings.hybrid_refine and have_live:
-            # 1) Fast draft from the live transcript (seconds).
-            await _emit_pass(websocket, store, settings, session, live_raw, template, refine=False)
-            # 2) Refine from the diarized transcript when the batch job finishes.
-            diar_raw = await _diarize(settings, session.session_id, pcm)
-            if diar_raw is not None and _has_text(diar_raw):
-                await _emit_pass(websocket, store, settings, session, diar_raw, template, refine=True)
-        else:
-            # Single pass: prefer the accurate diarized transcript, fall back to live.
+        async def _single_diarized_pass() -> None:
+            """One accurate pass: prefer the diarized transcript, fall back to live."""
             raw = await _diarize(settings, session.session_id, pcm)
             if raw is None or not _has_text(raw):
                 raw = live_raw
             if not _has_text(raw):
                 raise RuntimeError("no speech detected in audio")
             await _emit_pass(websocket, store, settings, session, raw, template, refine=False)
+
+        if session.auto_mode:
+            # Auto: instant draft, then diarize and REPLACE the draft only if it's complex.
+            if not have_live:
+                await _single_diarized_pass()
+            else:
+                await _emit_pass(websocket, store, settings, session, live_raw, template, refine=False)
+                diar_raw = await _diarize(settings, session.session_id, pcm)
+                if diar_raw is not None and _has_text(diar_raw):
+                    profile = _diarized_profile(diar_raw, settings)
+                    if profile.is_complex:
+                        await websocket.send_json({
+                            **mode_switch_notice(profile, InferenceMode.AUTO_BATCH),
+                            "session_id": session.session_id,
+                        })
+                        await _emit_pass(websocket, store, settings, session, diar_raw, template, refine=True)
+        elif session.manual_mode == "hybrid":
+            # Hybrid (best balance): instant draft for immediacy, then ALWAYS sharpen with the
+            # diarized (speaker-labeled) pass — fast reply AND full accuracy on every consult.
+            if have_live:
+                await _emit_pass(websocket, store, settings, session, live_raw, template, refine=False)
+                diar_raw = await _diarize(settings, session.session_id, pcm)
+                if diar_raw is not None and _has_text(diar_raw):
+                    await _emit_pass(websocket, store, settings, session, diar_raw, template, refine=True)
+            else:
+                await _single_diarized_pass()
+        elif session.manual_mode == "batch":
+            # Batch: live words already streamed for feedback; produce ONE accurate note now.
+            await _single_diarized_pass()
+        else:
+            # Real-time: live draft only — no diarization (fastest; no speaker labels).
+            if have_live:
+                await _emit_pass(websocket, store, settings, session, live_raw, template, refine=False)
+            else:
+                await _single_diarized_pass()
     except Exception as exc:  # noqa: BLE001 — escalate, never emit a silent blank record
         session.transition(ReviewState.ESCALATION_REQUIRED)
         await websocket.send_json({

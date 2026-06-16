@@ -1,0 +1,16 @@
+{
+  "id": "mother-son-fever",
+  "description": "The brief's failing case: caregiver speaks, the child is the patient.",
+  "transcript": [
+    {"speaker": "speaker_0", "text": "What happened?"},
+    {"speaker": "speaker_1", "text": "Doctor, my son has had fever for three days."},
+    {"speaker": "speaker_0", "text": "Is he vomiting?"},
+    {"speaker": "speaker_1", "text": "Yes, twice."}
+  ],
+  "expect": {
+    "doctor_label": "speaker_0",
+    "referenced_patient": "son",
+    "kind": "doctor_parent",
+    "has_roles": ["doctor", "caregiver"]
+  }
+}

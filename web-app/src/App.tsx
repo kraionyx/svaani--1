@@ -16,11 +16,12 @@ import { ConfidenceChip } from './components/ConfidenceChip';
 import { NoticeBanner } from './components/NoticeBanner';
 import { SpeakerTimeline } from './components/SpeakerTimeline';
 import { ReviewPrompt } from './components/ReviewPrompt';
-import { AiEditor } from './components/AiEditor';
 import { PrescriptionPreview } from './components/PrescriptionPreview';
 import { AdminDashboard } from './components/AdminDashboard';
+import { ThemeStudio } from './components/ThemeStudio';
+import { applyCustom, clearCustomInline, loadCustom } from './theme';
 
-const THEMES = ['mint', 'white', 'dark'];
+const THEMES = ['mint', 'white', 'dark', 'custom'];
 
 export function App() {
   const s = useStore();
@@ -28,6 +29,7 @@ export function App() {
   const sockRef = useRef<ConsultSocket | null>(null);
   const micRef = useRef<MicHandle | null>(null);
   const [signOpen, setSignOpen] = useState(false);
+  const [studioOpen, setStudioOpen] = useState(false);
 
   useEffect(() => {
     onToast((m, e) => { setToastMsg({ m, e }); setTimeout(() => setToastMsg(null), e ? 6500 : 3000); });
@@ -39,7 +41,13 @@ export function App() {
     }).catch(() => {});
   }, []);
 
-  const setTheme = (t: string) => { document.documentElement.dataset.theme = t; localStorage.setItem('svaani-theme', t); s.set({} as any); };
+  const setTheme = (t: string) => {
+    document.documentElement.dataset.theme = t;
+    localStorage.setItem('svaani-theme', t);
+    if (t === 'custom') { applyCustom(loadCustom()); setStudioOpen(true); }
+    else { clearCustomInline(); setStudioOpen(false); }
+    s.set({} as any);
+  };
 
   async function loadOutputs(sid: string) {
     const [note, risk, extraction, raw, clean] = await Promise.all(
@@ -79,7 +87,7 @@ export function App() {
         }),
         onModeSwitch: (m) => s.set({ modeNotice: m }),
         onError: (msg) => { toast(msg, true); s.set({ recording: false, busy: false }); },
-      });
+      }, undefined, s.modeChoice);
       s.set({ sessionId: sid, recording: true, activeTab: 'transcript' });
       micRef.current = await startMic((pcm) => sock.sendAudio(pcm));
     } catch (e: any) {
@@ -97,7 +105,7 @@ export function App() {
 
   // ── REST fallbacks ─────────────────────────────────────────────────────────
   async function newSession(): Promise<string> {
-    const r = await API.createSession(s.templateId);
+    const r = await API.createSession(s.templateId, s.modeChoice);
     s.resetSession(); s.set({ sessionId: r.session_id, reviewState: r.state });
     return r.session_id;
   }
@@ -166,6 +174,8 @@ export function App() {
             onRecord={record} onSimulate={simulate}
             onUpload={(f) => uploadFile(f)}
             analyser={micRef.current?.analyser || null}
+            modeChoice={s.modeChoice}
+            onModeChoice={(v) => { s.set({ modeChoice: v }); localStorage.setItem('svaani-mode', v); }}
           />
           {s.sessionId && (
             <SignOff
@@ -192,7 +202,6 @@ export function App() {
                 {s.activeTab === 'transcript' && <TranscriptView />}
                 {s.activeTab === 'grounding' && <GroundingPanel />}
                 {s.activeTab === 'speakers' && <SpeakerTimeline />}
-                {s.activeTab === 'ai-edit' && <AiEditor />}
                 {s.activeTab === 'prescription' && <PrescriptionPreview />}
                 {s.activeTab === 'admin' && <AdminDashboard />}
               </div>
@@ -201,6 +210,7 @@ export function App() {
         </section>
       </main>
 
+      {studioOpen && <ThemeStudio onClose={() => setStudioOpen(false)} />}
       {toastMsg && <div className={`toast ${toastMsg.e ? 'err' : ''}`}>{toastMsg.m}</div>}
     </div>
   );

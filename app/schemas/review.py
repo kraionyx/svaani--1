@@ -21,6 +21,7 @@ class InferenceMode(str, Enum):
     BATCH = "batch"
     AUTO_REALTIME = "auto_realtime"   # auto mode resolved to realtime
     AUTO_BATCH = "auto_batch"         # auto mode escalated to batch
+    HYBRID = "hybrid"                 # instant draft + always-on diarized refine (best balance)
 
 
 class ReviewRating(str, Enum):

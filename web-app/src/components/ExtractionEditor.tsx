@@ -2,6 +2,7 @@ import { useState } from 'react';
 import * as API from '../api';
 import { useStore } from '../store';
 import { toast } from '../toast';
+import { AiBot } from './AiBot';
 
 const OBJ: { key: string; label: string; cols: [string, string][]; empty: () => any }[] = [
   { key: 'chief_complaints', label: 'Chief complaints', cols: [['symptom', 'Symptom'], ['duration', 'Duration'], ['type', 'Type']], empty: () => ({ symptom: '', duration: '', type: '', provenance: { span_ids: [] } }) },
@@ -103,7 +104,10 @@ export function ExtractionEditor() {
 
   return (
     <div className="card">
-      <h2>Clinical extraction (grounded)</h2>
+      <div className="panel-head">
+        <h2>Clinical extraction (grounded)</h2>
+        {editable && <AiBot target="extraction" />}
+      </div>
       {editable && <div className="editbar"><button className="btn ghost sm" onClick={start}>✎ Edit extraction</button>
         <span className="kv">Edits re-render the note and re-check it against the transcript.</span></div>}
       {e.history_of_present_illness?.text && <><p><b>History of present illness</b></p><p>{e.history_of_present_illness.text}</p></>}

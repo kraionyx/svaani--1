@@ -8,7 +8,7 @@ const PIPELINE = [
   'prompt_optimization', 'offline_validation', 'human_approval', 'deployed',
 ];
 
-type Tab = 'reviews' | 'improvements' | 'prompts' | 'flags';
+type Tab = 'reviews' | 'improvements' | 'prompts' | 'flags' | 'analytics';
 
 export function AdminDashboard() {
   const role = useStore((s) => s.role);
@@ -21,6 +21,8 @@ export function AdminDashboard() {
   const [newContent, setNewContent] = useState('');
   const [flagKey, setFlagKey] = useState('');
   const [flagOn, setFlagOn] = useState(true);
+  const [errAnalytics, setErrAnalytics] = useState<Awaited<ReturnType<typeof API.getErrorAnalytics>> | null>(null);
+  const [latAnalytics, setLatAnalytics] = useState<Awaited<ReturnType<typeof API.getLatencyAnalytics>> | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
@@ -29,16 +31,29 @@ export function AdminDashboard() {
   }, [role]);
 
   async function refresh() {
-    const [rv, im, pr, fl] = await Promise.allSettled([
+    const [rv, im, pr, fl, ea, la] = await Promise.allSettled([
       API.getAdminReviews(),
       API.getImprovements(),
       API.getPrompts(),
       API.getFeatureFlags(),
+      API.getErrorAnalytics(),
+      API.getLatencyAnalytics(),
     ]);
     if (rv.status === 'fulfilled') setReviews(rv.value);
     if (im.status === 'fulfilled') setImprovements(im.value);
     if (pr.status === 'fulfilled') setPrompts(pr.value);
     if (fl.status === 'fulfilled') setFlags(fl.value);
+    if (ea.status === 'fulfilled') setErrAnalytics(ea.value);
+    if (la.status === 'fulfilled') setLatAnalytics(la.value);
+  }
+
+  async function evalItem(id: string) {
+    setBusy(id);
+    try {
+      const r = await API.runImprovementEval(id, { dataset: 'multispeaker@v1' });
+      toast(`Eval ${r.passed ? 'PASS' : 'FAIL'} — attribution ${(r.attribution * 100).toFixed(0)}% (${r.n_cases} cases)`, !r.passed);
+    } catch (e: any) { toast(e.message, true); }
+    finally { setBusy(null); }
   }
 
   async function triage(id: string, status: 'approved' | 'rejected') {
@@ -107,6 +122,7 @@ export function AdminDashboard() {
     ['improvements', 'Improvements'],
     ['prompts', 'Prompts'],
     ['flags', 'Feature flags'],
+    ['analytics', 'Analytics'],
   ];
 
   return (
@@ -174,6 +190,11 @@ export function AdminDashboard() {
               <span className="adm-meta" style={{ flex: 1, marginLeft: 8 }}>
                 {item.id.slice(0, 18)}
               </span>
+              {role === 'admin' && (
+                <button className="btn ghost sm" disabled={!!busy} onClick={() => evalItem(item.id)}>
+                  {busy === item.id ? '…' : 'Run eval'}
+                </button>
+              )}
               {item.stage !== 'deployed' && (
                 <button className="btn ghost sm" disabled={!!busy} onClick={() => advance(item.id)}>
                   {busy === item.id ? '…' : 'Advance →'}
@@ -225,6 +246,34 @@ export function AdminDashboard() {
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {tab === 'analytics' && (
+        <div>
+          <h3 style={{ fontSize: 13, margin: '0 0 8px' }}>Doctor feedback ({errAnalytics?.total_reviews ?? 0} reviews)</h3>
+          {errAnalytics && Object.keys(errAnalytics.by_error_category).length > 0 ? (
+            <table className="edit-tbl" style={{ marginBottom: 16 }}>
+              <thead><tr><th>Error category</th><th>Count</th></tr></thead>
+              <tbody>
+                {Object.entries(errAnalytics.by_error_category).map(([k, n]) => (
+                  <tr key={k}><td>{k.replace(/_/g, ' ')}</td><td>{n}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <div className="muted kv" style={{ marginBottom: 16 }}>No error categories recorded yet.</div>}
+
+          <h3 style={{ fontSize: 13, margin: '0 0 8px' }}>Stage latency (p50 / p95)</h3>
+          {latAnalytics && Object.keys(latAnalytics.stages).length > 0 ? (
+            <table className="edit-tbl">
+              <thead><tr><th>Stage</th><th>n</th><th>p50 ms</th><th>p95 ms</th></tr></thead>
+              <tbody>
+                {Object.entries(latAnalytics.stages).map(([stage, v]) => (
+                  <tr key={stage}><td>{stage}</td><td>{v.n}</td><td>{v.p50_ms}</td><td>{v.p95_ms}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <div className="muted kv">No latency telemetry yet — run a consultation.</div>}
         </div>
       )}
 

@@ -1,0 +1,16 @@
+{
+  "id": "patient-speaks-first",
+  "description": "Patient speaks before the doctor; first-seen labeling is wrong, behavior fixes it.",
+  "transcript": [
+    {"speaker": "speaker_0", "text": "I've had a bad headache since yesterday."},
+    {"speaker": "speaker_1", "text": "How long exactly, and do you have any fever?"},
+    {"speaker": "speaker_0", "text": "No fever, just the headache."},
+    {"speaker": "speaker_1", "text": "Let me examine you. Any nausea or blurred vision?"}
+  ],
+  "expect": {
+    "doctor_label": "speaker_1",
+    "referenced_patient": "patient",
+    "kind": "doctor_patient",
+    "has_roles": ["doctor", "patient"]
+  }
+}

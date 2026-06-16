@@ -65,6 +65,12 @@ class ConsultationSession(BaseModel):
     # and the chosen real-time/batch mode. Not clinical content.
     conversation_profile: ConversationProfile | None = None
     inference_mode: str | None = None
+    # Goal 3 — per-consult mode choice. The doctor picks one of three before recording:
+    #   • auto_mode=True            → the complexity classifier chooses realtime vs batch;
+    #   • auto_mode=False + manual_mode → the doctor's explicit "realtime" / "batch" pick.
+    # Persisted so the choice survives a reload.
+    auto_mode: bool = False
+    manual_mode: str = "realtime"   # "realtime" | "batch" — used only when auto_mode is False
     # Versioning (Goal 10) — the prompt/model that produced this consult, for rollback/audit.
     model_version: str | None = None
     prompt_version: str | None = None

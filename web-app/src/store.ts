@@ -9,6 +9,7 @@ interface AppState {
   templates: { template_id: string; name: string }[];
   templateId: string;
   role: string;
+  modeChoice: 'realtime' | 'batch' | 'auto' | 'hybrid';   // Goal 3: per-consult pre-recording mode pick
   sessionId: string | null;
   reviewState: ReviewState | null;
   stage: string;
@@ -46,6 +47,7 @@ export const useStore = create<AppState>((set) => ({
   templates: [],
   templateId: 'ent',
   role: localStorage.getItem('svaani-role') || 'doctor',
+  modeChoice: (localStorage.getItem('svaani-mode') as 'realtime' | 'batch' | 'auto' | 'hybrid') || 'realtime',
   sessionId: null,
   reviewState: null,
   stage: '',

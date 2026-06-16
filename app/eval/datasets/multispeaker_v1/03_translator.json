@@ -1,0 +1,15 @@
+{
+  "id": "translator",
+  "description": "An interpreter relays the patient's words; the translator is NOT the patient.",
+  "transcript": [
+    {"speaker": "speaker_0", "text": "Ask her what happened."},
+    {"speaker": "speaker_1", "text": "I am the translator. She says she has had stomach pain for a week."},
+    {"speaker": "speaker_0", "text": "Any vomiting or fever?"},
+    {"speaker": "speaker_1", "text": "She says no fever, but some nausea."}
+  ],
+  "expect": {
+    "doctor_label": "speaker_0",
+    "kind": "doctor_translator",
+    "has_roles": ["doctor", "translator"]
+  }
+}

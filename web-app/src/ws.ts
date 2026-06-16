@@ -21,13 +21,13 @@ export interface ConsultEvents {
 export class ConsultSocket {
   private ws: WebSocket | null = null;
 
-  connect(templateId: string, ev: ConsultEvents, sessionId?: string): Promise<string> {
+  connect(templateId: string, ev: ConsultEvents, sessionId?: string, mode: 'realtime' | 'batch' | 'auto' | 'hybrid' = 'realtime'): Promise<string> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`${WS_BASE}/ws/consultation`);
       ws.binaryType = 'arraybuffer';
       this.ws = ws;
       let sid = sessionId || '';
-      ws.onopen = () => ws.send(JSON.stringify({ action: 'start', template_id: templateId, session_id: sessionId }));
+      ws.onopen = () => ws.send(JSON.stringify({ action: 'start', template_id: templateId, session_id: sessionId, mode }));
       ws.onerror = () => reject(new Error('WebSocket connection failed — is the backend running on :8000?'));
       ws.onclose = () => ev.onClose?.();
       ws.onmessage = (e) => {

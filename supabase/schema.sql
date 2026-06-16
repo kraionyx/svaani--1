@@ -65,7 +65,7 @@ exception when duplicate_object then null; end $$;
 
 -- Real-time vs Batch (Goals 3/5/8/10)
 do $$ begin
-  create type inference_mode as enum ('realtime','batch','auto_realtime','auto_batch');
+  create type inference_mode as enum ('realtime','batch','auto_realtime','auto_batch','hybrid');
 exception when duplicate_object then null; end $$;
 
 -- Doctor review verdict (Goal 7)

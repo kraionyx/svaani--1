@@ -1,0 +1,17 @@
+{
+  "id": "cross-talk",
+  "description": "Overlapping turns / interruptions must register as complexity; attribution holds.",
+  "transcript": [
+    {"speaker": "speaker_0", "text": "What happened?", "start_ms": 0, "end_ms": 1500},
+    {"speaker": "speaker_1", "text": "My son has had fever for three days.", "start_ms": 1200, "end_ms": 3000},
+    {"speaker": "speaker_2", "text": "And he is coughing a lot too.", "start_ms": 2800, "end_ms": 4500, "confidence": 0.55},
+    {"speaker": "speaker_0", "text": "Is he vomiting?", "start_ms": 4300, "end_ms": 5200},
+    {"speaker": "speaker_1", "text": "Yes, twice.", "start_ms": 5100, "end_ms": 6000}
+  ],
+  "expect": {
+    "doctor_label": "speaker_0",
+    "referenced_patient": "son",
+    "has_roles": ["doctor", "caregiver"],
+    "is_complex": true
+  }
+}

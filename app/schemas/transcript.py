@@ -25,6 +25,10 @@ class TranscriptSegment(BaseModel):
 
     id: str = Field(..., description="Stable id, e.g. 'seg-0001' — referenced as provenance.")
     speaker: SpeakerRole = SpeakerRole.UNKNOWN
+    # Raw diarization label from the STT provider (e.g. 'speaker_0'). Preserved so we can
+    # re-assign clinical roles by BEHAVIOR (app.stt.doctor_detect) instead of trusting the
+    # provider's first-seen order, and so the speaker timeline can show the original grouping.
+    diarized_label: str | None = None
     text: str = ""
     language: str = "en-IN"          # detected source language (ISO-ish); Sarvam outputs English text
     start_ms: int = 0

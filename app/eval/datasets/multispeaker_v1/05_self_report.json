@@ -1,0 +1,17 @@
+{
+  "id": "self-report",
+  "description": "A single patient describes their own symptoms — must NOT invent a caregiver.",
+  "transcript": [
+    {"speaker": "speaker_0", "text": "What brings you in today?"},
+    {"speaker": "speaker_1", "text": "I have had throat pain for two months."},
+    {"speaker": "speaker_0", "text": "Any difficulty swallowing?"},
+    {"speaker": "speaker_1", "text": "Yes, mostly with solid foods."}
+  ],
+  "expect": {
+    "doctor_label": "speaker_0",
+    "referenced_patient": "patient",
+    "kind": "doctor_patient",
+    "has_roles": ["doctor", "patient"],
+    "is_complex": false
+  }
+}

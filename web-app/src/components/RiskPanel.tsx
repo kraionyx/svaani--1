@@ -2,6 +2,7 @@ import { useState } from 'react';
 import * as API from '../api';
 import { useStore } from '../store';
 import { toast } from '../toast';
+import { AiBot } from './AiBot';
 
 const TYPES = ['red_flag_symptom', 'allergy_mentioned', 'medication_mentioned', 'dosage_mentioned', 'abnormal_vital', 'low_stt_confidence', 'other'];
 const SEVS = ['info', 'low', 'moderate', 'high', 'critical'];
@@ -53,7 +54,10 @@ export function RiskPanel() {
 
   return (
     <div className="card">
-      <h2>Risk markers · attention score {pct}%</h2>
+      <div className="panel-head">
+        <h2>Risk markers · attention score {pct}%</h2>
+        {editable && <AiBot target="risk" />}
+      </div>
       <div className="gauge"><div style={{ width: `${pct}%` }} /></div>
       {editable && <div className="editbar"><button className="btn ghost sm" onClick={start}>✎ Edit risk markers</button></div>}
       {(s.risk.markers || []).map((m, i) => (

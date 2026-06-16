@@ -57,6 +57,8 @@ class Repository:
         self.rendered_docs: dict[str, RenderedDocument] = {}
         self.edits: dict[str, list] = {}        # session_id -> [ConsultationEdit-like dict]
         self.flags: dict[str, dict] = {}        # key -> {enabled, value}
+        self.ab_metrics: list[dict] = []        # prompt A/B outcome rows (Goal 13)
+        self.stage_latencies: list[dict] = []    # per-stage timing rows (Goals 4/12/13)
 
     # ── Goal 7: doctor reviews (+ auto-enqueue to admin) ───────────────────────
     def add_review(self, review: ConsultationReview) -> ConsultationReview:
@@ -148,6 +150,44 @@ class Repository:
             item.updated_at = datetime.now(timezone.utc)
             return item
 
+    def set_improvement_eval(
+        self, item_id: str, eval_results: dict, regression_test_id: str | None = None
+    ) -> ImprovementItem:
+        """Record an offline eval-harness result on an improvement item (Goal 9)."""
+        with self._lock:
+            item = self.improvements[item_id]
+            item.eval_results = eval_results
+            if regression_test_id:
+                item.regression_test_id = regression_test_id
+            item.updated_at = datetime.now(timezone.utc)
+            return item
+
+    # ── Goal 13: prompt A/B metrics ─────────────────────────────────────────────
+    def record_ab_metric(self, metric: dict) -> dict:
+        with self._lock:
+            self.ab_metrics.append(metric)
+            return metric
+
+    def list_ab_metrics(self, prompt_name: str | None = None) -> list[dict]:
+        with self._lock:
+            items = list(self.ab_metrics)
+        if prompt_name:
+            items = [m for m in items if m.get("prompt_name") == prompt_name]
+        return items
+
+    # ── Goals 4/12/13: per-stage latency telemetry ──────────────────────────────
+    def record_stage_latency(self, row: dict) -> dict:
+        with self._lock:
+            self.stage_latencies.append(row)
+            return row
+
+    def list_stage_latencies(self, stage: str | None = None) -> list[dict]:
+        with self._lock:
+            items = list(self.stage_latencies)
+        if stage:
+            items = [r for r in items if r.get("stage") == stage]
+        return items
+
     # ── Goal 10: prompt/model versions ─────────────────────────────────────────
     def add_prompt_version(self, pv: PromptVersion) -> PromptVersion:
         with self._lock:
@@ -234,13 +274,31 @@ class Repository:
     def add_edit(self, session_id: str, edit: dict) -> dict:
         with self._lock:
             seq = len(self.edits.get(session_id, [])) + 1
-            edit = {**edit, "seq": seq}
+            edit = {"undone": False, **edit, "seq": seq}
             self.edits.setdefault(session_id, []).append(edit)
             return edit
 
     def list_edits(self, session_id: str) -> list[dict]:
         with self._lock:
             return list(self.edits.get(session_id, []))
+
+    def set_edit_undone(self, session_id: str, seq: int, undone: bool) -> dict:
+        """Mark an edit undone/redone (Goal 11 undo/redo). Returns the updated edit."""
+        with self._lock:
+            for e in self.edits.get(session_id, []):
+                if e.get("seq") == seq:
+                    e["undone"] = undone
+                    return e
+            raise KeyError(seq)
+
+    def drop_undone_edits(self, session_id: str) -> list[int]:
+        """Discard the redo branch (called when a NEW edit is applied). Returns dropped seqs."""
+        with self._lock:
+            kept, dropped = [], []
+            for e in self.edits.get(session_id, []):
+                (dropped if e.get("undone") else kept).append(e)
+            self.edits[session_id] = kept
+            return [e["seq"] for e in dropped]
 
     # ── Goal 13: feature flags ─────────────────────────────────────────────────
     def set_flag(self, key: str, enabled: bool, value: dict | None = None) -> dict:
@@ -257,11 +315,49 @@ _repo: Repository | None = None
 
 
 def get_repo() -> Repository:
+    """Return the process-wide operational repository for the configured backend.
+
+    ``memory`` (default) keeps everything in RAM; ``sqlite`` / ``supabase`` return a
+    write-through PersistentRepository that survives restarts (same logic, durable store).
+    """
     global _repo
     if _repo is None:
-        _repo = Repository()
-        _seed(_repo)
+        _repo = _build_repo()
     return _repo
+
+
+def _build_repo() -> Repository:
+    from app.config import get_settings
+
+    backend = getattr(get_settings(), "store_backend", "memory")
+    if backend in ("sqlite", "supabase"):
+        try:
+            from app.data.repo_sql import (
+                build_persistent_repository,
+                make_postgres_store,
+                make_sqlite_store,
+            )
+
+            settings = get_settings()
+            store = (make_sqlite_store(settings) if backend == "sqlite"
+                     else make_postgres_store(settings))
+            return build_persistent_repository(store, settings)
+        except Exception:  # noqa: BLE001 — never crash the app over operational persistence
+            import logging
+
+            logging.getLogger("svaani.repo").warning(
+                "durable repo unavailable for backend=%s; falling back to in-memory", backend,
+                exc_info=True,
+            )
+    r = Repository()
+    _seed(r)
+    return r
+
+
+def reset_repo() -> None:
+    """Drop the cached repository (tests / backend switch)."""
+    global _repo
+    _repo = None
 
 
 def _seed(repo: Repository) -> None:

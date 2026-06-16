@@ -42,6 +42,40 @@ def _session_with_transcript() -> str:
     return sid
 
 
+# ── Goal 3 per-consult Auto AI Mode toggle ───────────────────────────────────
+_COMPLEX_TX = {
+    "session_id": "x",
+    "segments": [
+        {"id": "seg-0001", "speaker": "doctor", "text": "What happened?", "confidence": 0.95, "start_ms": 0, "end_ms": 1500},
+        {"id": "seg-0002", "speaker": "patient", "text": "My son has had fever for three days.", "confidence": 0.9, "start_ms": 1200, "end_ms": 3000},
+        {"id": "seg-0003", "speaker": "other", "text": "And he is coughing a lot too.", "confidence": 0.55, "start_ms": 2800, "end_ms": 4500},
+        {"id": "seg-0004", "speaker": "doctor", "text": "Is he vomiting?", "confidence": 0.95, "start_ms": 4300, "end_ms": 5200},
+    ],
+}
+
+
+def test_mode_choice_drives_inference_mode():
+    """Same complex consult, three pre-consult choices → three outcomes. Proves the
+    Real-time / Batch / Auto selector is wired, not cosmetic (Goal 3)."""
+    def run(mode: str) -> dict:
+        sid = client.post("/sessions", json={"template_id": "soap", "mode": mode}, headers=DOC).json()["session_id"]
+        return client.post(f"/sessions/{sid}/transcript", json=_COMPLEX_TX, headers=DOC).json()
+
+    rt, ba, au, hy = run("realtime"), run("batch"), run("auto"), run("hybrid")
+    assert rt["profile"]["is_complex"] is True   # the input really is complex
+    assert rt["inference_mode"] == "realtime"    # manual real-time is honored even when complex
+    assert ba["inference_mode"] == "batch"       # manual batch is honored
+    assert au["inference_mode"] == "auto_batch"  # auto + complex → batch
+    assert hy["inference_mode"] == "hybrid"      # hybrid is its own labeled mode
+
+
+def test_legacy_auto_flag_still_works():
+    """The older {auto: true} form keeps working as a fallback for `mode`."""
+    sid = client.post("/sessions", json={"template_id": "soap", "auto": True}, headers=DOC).json()["session_id"]
+    r = client.post(f"/sessions/{sid}/transcript", json=_COMPLEX_TX, headers=DOC).json()
+    assert r["inference_mode"] == "auto_batch"
+
+
 # ── Goal 1/2/4 profile ───────────────────────────────────────────────────────
 def test_profile_resolves_referenced_patient():
     sid = _session_with_transcript()
@@ -131,6 +165,32 @@ def test_ai_edit_apply_records_history():
     assert r.status_code == 200, r.text
     edits = client.get(f"/sessions/{sid}/edits", headers=DOC).json()
     assert len(edits) == 1 and edits[0]["after"] == "Tidied."
+
+
+def test_ai_edit_undo_then_redo():
+    sid = _session_with_transcript()
+    note = client.get(f"/sessions/{sid}/outputs/note", headers=DOC).json()
+    target = note["sections"][0]["section_id"]
+    original = note["sections"][0]["content_text"]
+
+    client.post(
+        f"/sessions/{sid}/ai-edit/apply",
+        json={"instruction": "x", "changes": [{"section_id": target, "content_text": "NEW TEXT"}]},
+        headers=DOC,
+    )
+
+    undo = client.post(f"/sessions/{sid}/ai-edit/undo", headers=DOC)
+    assert undo.status_code == 200, undo.text
+    sec = next(s for s in undo.json()["note"]["sections"] if s["section_id"] == target)
+    assert sec["content_text"] == original  # restored
+
+    redo = client.post(f"/sessions/{sid}/ai-edit/redo", headers=DOC)
+    assert redo.status_code == 200, redo.text
+    sec = next(s for s in redo.json()["note"]["sections"] if s["section_id"] == target)
+    assert sec["content_text"] == "NEW TEXT"  # re-applied
+
+    # Nothing left to redo.
+    assert client.post(f"/sessions/{sid}/ai-edit/redo", headers=DOC).status_code == 409
 
 
 # ── Prescription preview ──────────────────────────────────────────────────────

@@ -71,8 +71,8 @@ export type ReviewState = 'listening' | 'processing' | 'draft' | 'in_review' | '
 // ── REST calls ───────────────────────────────────────────────────────────────
 export const getHealth = () => api<{ sarvam: string; vertex: string }>('/health');
 export const listTemplates = () => api<{ template_id: string; name: string }[]>('/templates');
-export const createSession = (template_id: string) =>
-  api<{ session_id: string; state: ReviewState }>('/sessions', jsonBody({ template_id }));
+export const createSession = (template_id: string, mode: 'realtime' | 'batch' | 'auto' | 'hybrid' = 'realtime') =>
+  api<{ session_id: string; state: ReviewState }>('/sessions', jsonBody({ template_id, mode }));
 export const simulate = (sid: string) => api(`/sessions/${sid}/simulate`, { method: 'POST' });
 export const getOutput = <T = any>(sid: string, kind: string) => api<T>(`/sessions/${sid}/outputs/${kind}`);
 export const transition = (sid: string, body: any) => api(`/sessions/${sid}/state`, jsonBody(body));
@@ -99,6 +99,7 @@ export interface SpeakerProfile {
   span_ids?: string[];
   confidence: number;
 }
+export interface ReferencedSubject { label: string; relationship: string; evidence_span_ids: string[]; }
 export interface ConversationProfile {
   session_id: string;
   inference_mode?: string | null;
@@ -106,6 +107,7 @@ export interface ConversationProfile {
   speakers: SpeakerProfile[];
   speaker_count: number;
   referenced_patient?: string | null;
+  referenced_subjects?: ReferencedSubject[];
   complexity_score: number;
   is_complex: boolean;
   confidence_band: 'high' | 'moderate' | 'low';
@@ -186,6 +188,51 @@ export const aiEditApply = (sid: string, body: { instruction: string; changes: {
   api<{ session_id: string; state: string; note: Note }>(`/sessions/${sid}/ai-edit/apply`, jsonBody(body));
 
 export const getEdits = (sid: string) => api<EditEntry[]>(`/sessions/${sid}/edits`);
+
+export const aiEditUndo = (sid: string) =>
+  api<{ session_id: string; state: string; seq: number; note: Note }>(`/sessions/${sid}/ai-edit/undo`, { method: 'POST' });
+
+export const aiEditRedo = (sid: string) =>
+  api<{ session_id: string; state: string; seq: number; note: Note }>(`/sessions/${sid}/ai-edit/redo`, { method: 'POST' });
+
+// Structured-tab AI edits (Extraction, Risk). Preview returns readable before/after
+// `changes` for the UI plus the full `proposed` object the apply route needs.
+export interface AiEditProposal { instruction: string; changes: AiEditChange[]; proposed?: any; }
+
+export const aiEditExtractionPreview = (sid: string, body: { instruction: string }) =>
+  api<AiEditProposal>(`/sessions/${sid}/ai-edit/extraction`, jsonBody(body));
+
+export const aiEditExtractionApply = (sid: string, body: { instruction: string; proposed: Extraction }) =>
+  api<{ session_id: string; state: string; extraction: Extraction; note: Note; grounding: Grounding }>(
+    `/sessions/${sid}/ai-edit/extraction/apply`, jsonBody(body));
+
+export const aiEditRiskPreview = (sid: string, body: { instruction: string }) =>
+  api<AiEditProposal>(`/sessions/${sid}/ai-edit/risk`, jsonBody(body));
+
+export const aiEditRiskApply = (sid: string, body: { instruction: string; proposed: RiskMarker[] }) =>
+  api<{ session_id: string; state: string; risk: Risk }>(`/sessions/${sid}/ai-edit/risk/apply`, jsonBody(body));
+
+// ── Eval harness + A/B + analytics (admin) ──────────────────────────────────
+export const runImprovementEval = (id: string, body: { candidate_prompt?: string; dataset?: string; prompt_name?: string } = {}) =>
+  api<{ dataset: string; n_cases: number; attribution: number; passed: boolean; failures: string[] }>(
+    `/admin/improvements/${id}/eval`, jsonBody(body));
+
+export const getImprovementEval = (id: string) => api<any>(`/admin/improvements/${id}/eval`);
+
+export const setPromptAb = (name: string, body: { enabled: boolean; b_version_id?: string; b_pct: number }) =>
+  api<{ key: string; enabled: boolean; value: any }>(`/admin/prompts/${name}/ab`, jsonBody(body));
+
+export const getPromptAbMetrics = (name: string) =>
+  api<{ prompt_name: string; arms: Record<string, { n: number; helpful: number; needs_improvement: number; needs_improvement_rate: number }>; total: number }>(
+    `/admin/prompts/${name}/ab/metrics`);
+
+export const getErrorAnalytics = () =>
+  api<{ total_reviews: number; by_error_category: Record<string, number>; by_rating: Record<string, number>; by_inference_mode: Record<string, number> }>(
+    `/admin/analytics/errors`);
+
+export const getLatencyAnalytics = () =>
+  api<{ stages: Record<string, { n: number; p50_ms: number; p95_ms: number }>; total: number }>(
+    `/admin/analytics/latency`);
 
 export const documentPreview = (sid: string, body: { doc_type: string; branding?: Record<string, string> }) =>
   api<RenderedDocument>(`/sessions/${sid}/document/preview`, jsonBody(body));
