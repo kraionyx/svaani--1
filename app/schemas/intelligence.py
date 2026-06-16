@@ -50,6 +50,19 @@ class ConfidenceBand(str, Enum):
     LOW = "low"
 
 
+class ReferencedSubject(BaseModel):
+    """A distinct person the consultation is clinically ABOUT (Goal 1, multi-patient).
+
+    A single consult can reference more than one patient (e.g. a parent describing two
+    children, or "my son has fever and I also have a cough"). Each subject carries the
+    transcript spans that evidence it so the timeline/note can attribute correctly.
+    """
+
+    label: str                                   # e.g. 'son', 'father', 'patient'
+    relationship: SpeakerRelationship = SpeakerRelationship.UNKNOWN
+    evidence_span_ids: list[str] = Field(default_factory=list)
+
+
 class SpeakerProfile(BaseModel):
     """One resolved participant in the consultation."""
 
@@ -77,6 +90,9 @@ class ConversationProfile(BaseModel):
     # The patient the consultation is primarily ABOUT (e.g. 'son', 'patient', 'father').
     referenced_patient: str | None = None
     referenced_patient_evidence: list[str] = Field(default_factory=list)
+    # All distinct people the consult references (Goal 1, multi-patient). The first entry
+    # corresponds to ``referenced_patient``; a single-patient consult has exactly one.
+    referenced_subjects: list[ReferencedSubject] = Field(default_factory=list)
 
     # Complexity (Goal 2)
     complexity_score: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -94,6 +110,7 @@ class ConversationProfile(BaseModel):
             "kind": self.kind.value,
             "speaker_count": self.speaker_count,
             "referenced_patient": self.referenced_patient,
+            "referenced_subjects": [s.model_dump(mode="json") for s in self.referenced_subjects],
             "complexity_score": round(self.complexity_score, 3),
             "is_complex": self.is_complex,
             "confidence_band": self.confidence_band.value,

@@ -192,9 +192,13 @@ def _segments_from_entries(session_id: str, entries: list, lang: str) -> RawTran
     segments: list[TranscriptSegment] = []
     for i, e in enumerate(entries):
         get = (lambda k, d=None: getattr(e, k, None) if not isinstance(e, dict) else e.get(k, d))
+        speaker_id = get("speaker_id", i)
         segments.append(TranscriptSegment(
             id=f"seg-{i + 1:04d}",
-            speaker=_role_for(get("speaker_id", i), role_map),
+            speaker=_role_for(speaker_id, role_map),
+            # Preserve the raw provider label so app.stt.doctor_detect can re-assign roles
+            # by behavior rather than trusting first-seen order.
+            diarized_label=str(speaker_id),
             text=get("transcript", "") or "",
             language=lang,
             start_ms=int(float(get("start_time_seconds", 0) or 0) * 1000),

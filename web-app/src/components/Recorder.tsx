@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react';
-import { useStore } from '../store';
 
 interface Props {
   recording: boolean; busy: boolean; streaming: boolean; stage: string;
@@ -7,112 +6,91 @@ interface Props {
   onTemplate: (t: string) => void;
   onRecord: () => void; onSimulate: () => void; onUpload: (f: File) => void;
   analyser: AnalyserNode | null;
+  modeChoice: 'realtime' | 'batch' | 'auto' | 'hybrid';
+  onModeChoice: (v: 'realtime' | 'batch' | 'auto' | 'hybrid') => void;
 }
 
+type ModeId = 'realtime' | 'hybrid' | 'batch' | 'auto';
+const MODE_OPTIONS: { id: ModeId; label: string }[] = [
+  { id: 'realtime', label: 'Real-time' },
+  { id: 'hybrid', label: 'Hybrid' },
+  { id: 'batch', label: 'Batch' },
+  { id: 'auto', label: 'Auto' },
+];
+const MODE_HINT: Record<ModeId, string> = {
+  realtime: 'Fastest — note streams live; no speaker separation.',
+  hybrid: 'Best balance — instant draft, then always sharpens to full speaker-labeled accuracy.',
+  batch: 'Most accurate — full speaker labels; note is produced after you stop.',
+  auto: 'AI decides — keeps the live draft for simple consults, sharpens only when complex.',
+};
+
 export function Recorder(p: Props) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const segments = useStore((s) => s.segments);
-
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const glowRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-    }
-  }, [segments]);
 
   useEffect(() => {
     if (!p.analyser || !p.recording) return;
+    const cv = canvasRef.current!; const ctx = cv.getContext('2d')!;
     const data = new Uint8Array(p.analyser.frequencyBinCount);
     let raf = 0;
     const draw = () => {
       raf = requestAnimationFrame(draw);
+      const w = cv.width = cv.clientWidth || 280; const h = cv.height = 46;
+      ctx.clearRect(0, 0, w, h);
       p.analyser!.getByteFrequencyData(data);
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) sum += data[i];
-      const avg = sum / data.length;
-      if (glowRef.current) {
-        const intensity = avg / 255;
-        glowRef.current.style.opacity = `${0.3 + intensity * 0.7}`;
-        glowRef.current.style.transform = `scaleY(${1 + intensity})`;
-      }
+      const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#0fb9a6';
+      ctx.fillStyle = accent;
+      const bars = 40, step = Math.max(1, Math.floor(data.length / bars)), bw = w / bars;
+      for (let i = 0; i < bars; i++) { const v = data[i * step] / 255; const bh = Math.max(2, v * h * 0.95); ctx.fillRect(i * bw + 1, (h - bh) / 2, bw - 2, bh); }
     };
     draw();
     return () => cancelAnimationFrame(raf);
   }, [p.analyser, p.recording]);
 
   return (
-    <>
-      { (p.recording || p.busy) && (
-        <div ref={glowRef} className="aurora-glow"></div>
-      )}
-      <div className="recorder-panel" style={{ zIndex: 1, position: 'relative' }}>
-        <div style={{ flexGrow: 1 }}></div>
+    <div className="card panel">
+      <div className="step-h"><span className="n">1</span><h3>Capture</h3></div>
+      <label className="lbl">Template</label>
+      <select value={p.templateId} disabled={p.busy} onChange={(e) => p.onTemplate(e.target.value)}>
+        {p.templates.map((t) => <option key={t.template_id} value={t.template_id}>{t.name}</option>)}
+      </select>
 
-      { p.recording || p.busy ? (
-        <div className="spotify-lyrics-container">
-          {p.busy && !p.recording ? (
-            <div className="processing-state">
-               <div className="spinner"></div>
-               <h3>{p.stage || 'Processing consultation...'}</h3>
-            </div>
-          ) : (
-             <div style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-                 <div className="lyrics-scroll" ref={scrollRef} style={{ zIndex: 1, position: 'relative', paddingBottom: '80px' }}>
-                    {segments.map((seg, i) => (
-                       <span key={seg.span_id || i} className={`lyric-txt ${seg.final ? 'final' : 'active'}`}>
-                         {seg.text}{' '}
-                         {seg.final === false && <span className="caret">_</span>}
-                       </span>
-                    ))}
-                 </div>
-             </div>
-          )}
+      <div className={`mic-wrap ${p.recording ? 'live' : ''}`}>
+        <canvas ref={canvasRef} className="mic-canvas" />
+        <div className="mic-status">
+          {p.recording ? <b>Listening… {p.streaming ? '(streaming live)' : ''}</b>
+            : p.busy ? <b>{p.stage || 'Processing'}…</b>
+              : 'Ready — press record to start.'}
         </div>
-      ) : (
-        <div className="templates-container" style={{ position: 'relative', width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-          <h2 style={{ position: 'absolute', top: '-100px', fontSize: '1.8rem', fontWeight: 'bold', color: 'gray', margin: 0, textAlign: 'center', width: '100%' }}>Choose Template</h2>
-          <div className="templates-grid" style={{ margin: 0 }}>
-            {p.templates.map((t) => (
-              <button 
-                key={t.template_id} 
-                className={`doc-icon ${p.templateId === t.template_id ? 'active' : ''}`}
-                onClick={() => p.onTemplate(t.template_id)}
-                disabled={p.busy}
-              >
-                <div className="doc-preview">
-                  <div className="line"></div>
-                  <div className="line"></div>
-                  <div className="line half"></div>
-                </div>
-                <span className="doc-name">{t.name}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      </div>
 
+      <label className="lbl">Inference mode</label>
+      <div className="mode-seg" role="group" aria-label="Inference mode">
+        {MODE_OPTIONS.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            className={p.modeChoice === m.id ? 'active' : ''}
+            disabled={p.recording || p.busy}
+            onClick={() => p.onModeChoice(m.id)}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+      <p className="hint" style={{ marginTop: 6 }}>{MODE_HINT[p.modeChoice]}</p>
 
+      <button className={`btn big ${p.recording ? 'danger' : ''}`} onClick={p.onRecord} disabled={p.busy && !p.recording}>
+        {p.recording ? '■ Stop & finalize' : '● Record consultation'}
+      </button>
 
-      <div style={{ flexGrow: 1 }}></div>
-
-      <div className="record-controls-row">
+      <div className="row">
         <input ref={fileRef} type="file" accept="audio/*" style={{ display: 'none' }}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) p.onUpload(f); e.currentTarget.value = ''; }} />
-        <button className="icon-btn" disabled={p.busy} onClick={() => fileRef.current?.click()} title="Upload audio">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-        </button>
-        
-        <button className={`pill-btn ${p.recording ? 'danger' : 'primary'}`} onClick={p.onRecord} disabled={p.busy && !p.recording}>
-          {p.recording ? '■ Stop & finalize' : '● Start Recording'}
-        </button>
-
-        <button className="icon-btn" disabled={p.busy} onClick={p.onSimulate} title="Simulate">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        </button>
+        <button className="btn ghost sm" disabled={p.busy} onClick={() => fileRef.current?.click()}>Upload audio</button>
+        <button className="btn ghost sm" disabled={p.busy} onClick={p.onSimulate}>▶ Simulate</button>
       </div>
-      </div>
-    </>
+      <p className="hint">Record uses real-time streaming STT; on stop, the consult is diarized and the note streams in.</p>
+    </div>
   );
 }

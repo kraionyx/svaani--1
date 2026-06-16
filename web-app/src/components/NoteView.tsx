@@ -2,6 +2,7 @@ import { useState } from 'react';
 import * as API from '../api';
 import { useStore } from '../store';
 import { toast } from '../toast';
+import { AiBot } from './AiBot';
 
 export function NoteView() {
   const s = useStore();
@@ -47,6 +48,7 @@ export function NoteView() {
         <h2>Consultation note</h2>
         <span className={`badge state-${s.reviewState}`}>{s.reviewState?.replace('_', ' ')}</span>
         <span className="kv">{s.note.template_id}@{s.note.template_version}</span>
+        {editable && <AiBot target="note" className="push" />}
       </div>
       {editable && (
         <div className="editbar">

@@ -12,33 +12,27 @@ import { ExtractionEditor } from './components/ExtractionEditor';
 import { GroundingPanel } from './components/GroundingPanel';
 import { TranscriptView } from './components/TranscriptView';
 import { SignOff } from './components/SignOff';
-import { NotificationsSidebar, type Notification } from './components/NotificationsSidebar';
 import { ConfidenceChip } from './components/ConfidenceChip';
 import { NoticeBanner } from './components/NoticeBanner';
 import { SpeakerTimeline } from './components/SpeakerTimeline';
 import { ReviewPrompt } from './components/ReviewPrompt';
-import { AiEditor } from './components/AiEditor';
 import { PrescriptionPreview } from './components/PrescriptionPreview';
 import { AdminDashboard } from './components/AdminDashboard';
+import { ThemeStudio } from './components/ThemeStudio';
+import { applyCustom, clearCustomInline, loadCustom } from './theme';
 
-const THEMES = ['mint', 'white', 'dark'];
+const THEMES = ['mint', 'white', 'dark', 'custom'];
 
 export function App() {
   const s = useStore();
   const [toastMsg, setToastMsg] = useState<{ m: string; e: boolean } | null>(null);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [showNotifs, setShowNotifs] = useState(false);
-  const notifIdRef = useRef(0);
   const sockRef = useRef<ConsultSocket | null>(null);
   const micRef = useRef<MicHandle | null>(null);
   const [signOpen, setSignOpen] = useState(false);
+  const [studioOpen, setStudioOpen] = useState(false);
 
   useEffect(() => {
-    onToast((m, e) => { 
-      setToastMsg({ m, e }); 
-      setTimeout(() => setToastMsg(null), e ? 6500 : 3000); 
-      setNotifications(prev => [{ id: ++notifIdRef.current, m, e, time: new Date() }, ...prev]);
-    });
+    onToast((m, e) => { setToastMsg({ m, e }); setTimeout(() => setToastMsg(null), e ? 6500 : 3000); });
     API.getHealth().then((h) => s.set({ health: h })).catch(() => toast('backend unreachable on :8000', true));
     API.listTemplates().then((t) => {
       s.set({ templates: t });
@@ -47,7 +41,13 @@ export function App() {
     }).catch(() => {});
   }, []);
 
-  const setTheme = (t: string) => { document.documentElement.dataset.theme = t; localStorage.setItem('svaani-theme', t); s.set({} as any); };
+  const setTheme = (t: string) => {
+    document.documentElement.dataset.theme = t;
+    localStorage.setItem('svaani-theme', t);
+    if (t === 'custom') { applyCustom(loadCustom()); setStudioOpen(true); }
+    else { clearCustomInline(); setStudioOpen(false); }
+    s.set({} as any);
+  };
 
   async function loadOutputs(sid: string) {
     const [note, risk, extraction, raw, clean] = await Promise.all(
@@ -87,7 +87,7 @@ export function App() {
         }),
         onModeSwitch: (m) => s.set({ modeNotice: m }),
         onError: (msg) => { toast(msg, true); s.set({ recording: false, busy: false }); },
-      });
+      }, undefined, s.modeChoice);
       s.set({ sessionId: sid, recording: true, activeTab: 'transcript' });
       micRef.current = await startMic((pcm) => sock.sendAudio(pcm));
     } catch (e: any) {
@@ -105,7 +105,7 @@ export function App() {
 
   // ── REST fallbacks ─────────────────────────────────────────────────────────
   async function newSession(): Promise<string> {
-    const r = await API.createSession(s.templateId);
+    const r = await API.createSession(s.templateId, s.modeChoice);
     s.resetSession(); s.set({ sessionId: r.session_id, reviewState: r.state });
     return r.session_id;
   }
@@ -127,7 +127,6 @@ export function App() {
   }
 
   const live = s.recording || s.busy;
-  const isReviewing = !!s.sessionId && !live;
   const downloadExport = (fmt: string) => {
     if (!s.sessionId) return;
     fetch(API.exportUrl(s.sessionId, fmt), { headers: API.authHeaders() }).then(async (r) => {
@@ -138,9 +137,18 @@ export function App() {
   };
 
   return (
-    <div className="shell" style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', width: '100%' }}>
+    <div className="shell">
       <header className="topbar">
-        <div className="brand"><b>Svaani.</b><span className="sub">AI Medical Scribe</span></div>
+        <div className="brand">
+          <span className="logo">𝓢</span>
+          <div className="brand-id">
+            <b>Svaani<span className="dot">.</span></b>
+            <span className="sub">AI Medical Scribe — a faithful scribe, never prescribes</span>
+          </div>
+          <svg className="ekg" viewBox="0 0 132 24" aria-hidden="true" focusable="false">
+            <path d="M0 12 H46 l3.5 -8 l4.5 16 l4 -13 l3 5 H78 l3.5 -10 l4.5 18 l3 -8 H132" />
+          </svg>
+        </div>
         <div className="topctrls">
           <span className={`pill ${s.health?.sarvam === 'live' ? 'live' : 'mock'}`}><span className="d" />STT: {s.health?.sarvam || '…'}</span>
           <span className={`pill ${s.health?.vertex === 'live' ? 'live' : 'mock'}`}><span className="d" />LLM: {s.health?.vertex || '…'}</span>
@@ -153,78 +161,56 @@ export function App() {
             </select>
           </label>
           <div className="seg-theme">{THEMES.map((t) => <button key={t} className={document.documentElement.dataset.theme === t ? 'active' : ''} onClick={() => setTheme(t)}>{t[0].toUpperCase() + t.slice(1)}</button>)}</div>
-          
-          <div style={{ position: 'relative' }}>
-            <button className="btn ghost sm" onClick={() => setShowNotifs(true)} style={{ padding: '4px 8px', background: 'transparent', display: 'flex', alignItems: 'center' }}>
-              <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-              </svg>
-              {notifications.length > 0 && <span style={{ position: 'absolute', top: '-2px', right: '-2px', background: 'var(--critical)', color: 'white', borderRadius: '50%', width: '16px', height: '16px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{notifications.length}</span>}
-            </button>
-          </div>
         </div>
       </header>
 
       <NoticeBanner notice={s.modeNotice} onDismiss={() => s.set({ modeNotice: null })} />
 
-      <div style={{ display: 'flex', flexDirection: 'row', flex: 1, width: '100%' }}>
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          {isReviewing && s.sessionId && (
+      <main className="grid">
+        <aside className="left">
+          <Recorder
+            recording={s.recording} busy={live} streaming={s.streaming} stage={s.stage}
+            templates={s.templates} templateId={s.templateId} onTemplate={(t) => s.set({ templateId: t })}
+            onRecord={record} onSimulate={simulate}
+            onUpload={(f) => uploadFile(f)}
+            analyser={micRef.current?.analyser || null}
+            modeChoice={s.modeChoice}
+            onModeChoice={(v) => { s.set({ modeChoice: v }); localStorage.setItem('svaani-mode', v); }}
+          />
+          {s.sessionId && (
             <SignOff
               state={s.reviewState} hasNote={!!s.note} signOpen={signOpen}
               onTransition={doTransition} onOpenSign={() => setSignOpen(true)} onCloseSign={() => setSignOpen(false)}
               onExport={downloadExport}
             />
           )}
+          {s.sessionId && !s.reviewSubmitted && s.reviewState && !['listening', 'processing'].includes(s.reviewState) && (
+            <ReviewPrompt sessionId={s.sessionId} onSubmit={() => s.set({ reviewSubmitted: true })} />
+          )}
+        </aside>
 
-          <main className="center-layout">
-            {!isReviewing ? (
-              <div className="center-container">
-                <Recorder
-                  recording={s.recording} busy={live} streaming={s.streaming} stage={s.stage}
-                  templates={s.templates} templateId={s.templateId} onTemplate={(t) => s.set({ templateId: t })}
-                  onRecord={record} onSimulate={simulate}
-                  onUpload={(f) => uploadFile(f)}
-                  analyser={micRef.current?.analyser || null}
-                />
+        <section className="right">
+          {!s.sessionId && !live ? (
+            <div className="card muted empty">Start a consult — record live (streaming), upload audio, or simulate.</div>
+          ) : (
+            <>
+              <Tabs active={s.activeTab} onTab={(t) => s.set({ activeTab: t })} role={s.role} />
+              <div className="tabbody">
+                {s.activeTab === 'note' && <NoteView />}
+                {s.activeTab === 'risk' && <RiskPanel />}
+                {s.activeTab === 'extraction' && <ExtractionEditor />}
+                {s.activeTab === 'transcript' && <TranscriptView />}
+                {s.activeTab === 'grounding' && <GroundingPanel />}
+                {s.activeTab === 'speakers' && <SpeakerTimeline />}
+                {s.activeTab === 'prescription' && <PrescriptionPreview />}
+                {s.activeTab === 'admin' && <AdminDashboard />}
               </div>
-            ) : (
-              <div className="center-container" style={{ maxWidth: '1200px', width: '100%', marginTop: 'var(--space-md)' }}>
-                {s.sessionId && !s.reviewSubmitted && s.reviewState && !['listening', 'processing'].includes(s.reviewState) && (
-                  <ReviewPrompt sessionId={s.sessionId} onSubmit={() => s.set({ reviewSubmitted: true })} />
-                )}
-                <section className="right" style={{ padding: 0 }}>
-                  <Tabs active={s.activeTab} onTab={(t) => s.set({ activeTab: t })} role={s.role} />
-                  <div className="tabbody">
-                    {s.activeTab === 'note' && <NoteView />}
-                    {s.activeTab === 'risk' && <RiskPanel />}
-                    {s.activeTab === 'extraction' && <ExtractionEditor />}
-                    {s.activeTab === 'transcript' && <TranscriptView />}
-                    {s.activeTab === 'grounding' && <GroundingPanel />}
-                    {s.activeTab === 'speakers' && <SpeakerTimeline />}
-                    {s.activeTab === 'ai-edit' && <AiEditor />}
-                    {s.activeTab === 'prescription' && <PrescriptionPreview />}
-                    {s.activeTab === 'admin' && <AdminDashboard />}
-                  </div>
-                </section>
-              </div>
-            )}
-          </main>
+            </>
+          )}
+        </section>
+      </main>
 
-          <footer className="app-footer">
-            <p className="hint">Record uses real-time streaming STT; on stop, the consult is diarized and the note streams in.</p>
-          </footer>
-        </div>
-
-        <NotificationsSidebar 
-          open={showNotifs} 
-          notifications={notifications} 
-          onClose={() => setShowNotifs(false)} 
-          onClear={() => setNotifications([])} 
-        />
-      </div>
-
+      {studioOpen && <ThemeStudio onClose={() => setStudioOpen(false)} />}
       {toastMsg && <div className={`toast ${toastMsg.e ? 'err' : ''}`}>{toastMsg.m}</div>}
     </div>
   );

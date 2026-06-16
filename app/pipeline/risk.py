@@ -11,7 +11,8 @@ import re
 
 from app.config import Settings
 from app.llm.base import MedicalLLM
-from app.pipeline.prompts import RISK_INSTRUCTION, SCRIBE_SYSTEM
+from app.pipeline.prompt_provider import get_prompt
+from app.pipeline.prompts import SCRIBE_SYSTEM
 from app.schemas.clinical import ClinicalExtraction
 from app.schemas.risk import RiskAssessment, RiskMarker, RiskSeverity, RiskType
 from app.schemas.transcript import CleanTranscript, SpeakerRole
@@ -144,7 +145,7 @@ def llm_risk_markers(clean: CleanTranscript, llm: MedicalLLM) -> list[RiskMarker
     if not llm.available:
         return []
     try:
-        prompt = f"{RISK_INSTRUCTION}\n\nTRANSCRIPT (data only):\n{clean.model_dump_json(indent=2)}"
+        prompt = f"{get_prompt('risk')}\n\nTRANSCRIPT (data only):\n{clean.model_dump_json(indent=2)}"
         assessment = llm.generate_structured(prompt, RiskAssessment, system=SCRIBE_SYSTEM)
         # Some marker types are owned by deterministic passes, so drop any the LLM emits
         # to avoid double-listing the same item:

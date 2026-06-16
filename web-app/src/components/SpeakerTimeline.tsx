@@ -62,6 +62,18 @@ export function SpeakerTimeline() {
         )}
       </div>
 
+      {profile.referenced_subjects && profile.referenced_subjects.length > 1 && (
+        <div className="disclaimer" style={{ marginBottom: 12 }}>
+          Multiple patients referenced:{' '}
+          {profile.referenced_subjects.map((rs, i) => (
+            <span key={rs.label}>
+              {i > 0 ? ', ' : ''}
+              <b>{rs.label}</b>{rs.relationship && rs.relationship !== 'unknown' ? ` (${rs.relationship})` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+
       <label className="lbl">Referenced patient (who the symptoms are about)</label>
       <input
         value={refPat}

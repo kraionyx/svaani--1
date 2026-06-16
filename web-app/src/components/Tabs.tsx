@@ -5,7 +5,6 @@ const BASE_TABS: [string, string][] = [
   ['transcript', 'Transcript'],
   ['grounding', 'Grounding'],
   ['speakers', 'Speakers'],
-  ['ai-edit', 'AI Edit'],
   ['prescription', 'Prescription'],
 ];
 

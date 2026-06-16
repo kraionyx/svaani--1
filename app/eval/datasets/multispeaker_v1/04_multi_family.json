@@ -1,0 +1,18 @@
+{
+  "id": "multi-family",
+  "description": "Two relatives each describe a different child => two referenced patients.",
+  "transcript": [
+    {"speaker": "speaker_0", "text": "What seems to be the problem today?"},
+    {"speaker": "speaker_1", "text": "My son has had a high fever for two days."},
+    {"speaker": "speaker_2", "text": "And my daughter has a bad cough since Monday."},
+    {"speaker": "speaker_0", "text": "Are either of them vomiting?"},
+    {"speaker": "speaker_1", "text": "No vomiting."}
+  ],
+  "expect": {
+    "doctor_label": "speaker_0",
+    "referenced_patient": "son",
+    "referenced_subjects": ["son", "daughter"],
+    "kind": "multi_family",
+    "has_roles": ["doctor", "caregiver"]
+  }
+}

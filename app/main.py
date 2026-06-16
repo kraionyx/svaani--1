@@ -7,6 +7,7 @@ PHI-touching action is permission-checked and audited.
 from __future__ import annotations
 
 import asyncio
+import time
 import json
 import logging
 import uuid
@@ -26,10 +27,11 @@ from app.export import exporter
 from app.export.pdf import note_to_pdf
 from app.observability import setup_observability
 from app.llm.base import get_llm
-from app.pipeline.ai_edit import propose_note_edit
+from app.pipeline.ai_edit import propose_extraction_edit, propose_note_edit, propose_risk_edit
 from app.pipeline.coding import suggest_icd10
-from app.pipeline.inference_mode import decide_mode
+from app.pipeline.inference_mode import decide_mode, split_mode_choice
 from app.pipeline.orchestrator import rebuild_from_extraction, run_pipeline
+from app.pipeline.prompt_provider import invalidate_prompts
 from app.pipeline.risk import aggregate_score
 from app.security.audit import AuditEvent, get_audit_log
 from app.security.auth import AuthError, principal_from
@@ -137,6 +139,10 @@ class CreateSessionRequest(BaseModel):
     template_id: str = "soap"
     patient_id: str | None = None
     practitioner_id: str | None = None
+    # Goal 3 pre-consult mode choice: "auto" | "realtime" | "batch". ``auto`` (bool) is
+    # the legacy form, kept as a fallback when ``mode`` is omitted.
+    mode: str | None = None
+    auto: bool = False
 
 
 class StateRequest(BaseModel):
@@ -250,9 +256,11 @@ def create_session(req: CreateSessionRequest, principal: Principal = Depends(get
     except KeyError:
         raise HTTPException(status_code=404, detail=f"unknown template '{req.template_id}'")
     sid = f"sess-{uuid.uuid4().hex[:12]}"
+    auto_mode, manual_mode = split_mode_choice(req.mode, legacy_auto=req.auto)
     session = ConsultationSession(
         session_id=sid, template_id=req.template_id,
         patient_id=req.patient_id, practitioner_id=req.practitioner_id or principal.id,
+        auto_mode=auto_mode, manual_mode=manual_mode,
     )
     get_store().create(session)
     get_audit_log().record(AuditEvent(actor_id=principal.id, action="create_session", resource="session", session_id=sid))
@@ -264,7 +272,9 @@ def _process(session: ConsultationSession, raw: RawTranscript, principal: Princi
     if session.state is ReviewState.LISTENING:
         session.transition(ReviewState.PROCESSING)
     template = get_registry().get(session.template_id)
+    _t0 = time.perf_counter()
     result = run_pipeline(raw, template, settings=settings)
+    _pipeline_ms = int((time.perf_counter() - _t0) * 1000)
     session.raw_transcript = raw
     session.clean_transcript = result.clean
     session.extraction = result.extraction
@@ -272,13 +282,20 @@ def _process(session: ConsultationSession, raw: RawTranscript, principal: Princi
     session.risk = result.risk
     session.conversation_profile = result.profile
     if result.profile is not None:
-        session.inference_mode = decide_mode(result.profile, settings).value
+        session.inference_mode = decide_mode(
+            result.profile, settings, auto=session.auto_mode, manual=session.manual_mode
+        ).value
     session.template_version = template.version
     # Goal 10: stamp the active model + extraction-prompt version for rollback/audit.
     repo = get_repo()
     session.model_version = settings.gemini_model
     _active_extract = repo.active_prompt("extract")
     session.prompt_version = f"extract@{_active_extract.version}" if _active_extract else None
+    # Goals 4/12: record pipeline latency so the analytics tab can show p50/p95 by mode.
+    repo.record_stage_latency({
+        "stage": "pipeline", "session_id": session.session_id, "latency_ms": _pipeline_ms,
+        "inference_mode": session.inference_mode, "model_version": session.model_version,
+    })
     get_store().set_result(session.session_id, result)
     if session.state is ReviewState.PROCESSING:
         session.transition(ReviewState.DRAFT)
@@ -702,11 +719,36 @@ def submit_review(sid: str, req: ReviewRequest, principal: Principal = Depends(g
         speaker_count=profile.speaker_count if profile else None,
     )
     get_repo().add_review(review)
+    _record_ab_metrics(sid, review)
     get_audit_log().record(AuditEvent(
         actor_id=principal.id, action="submit_review", resource="review", session_id=sid,
         detail=req.rating.value,
     ))
     return {"review_id": review.id, "rating": review.rating.value}
+
+
+def _ab_arm(prompt_name: str, session_id: str, b_pct: int) -> str:
+    """Deterministic A/B split: the same session always lands in the same arm."""
+    import hashlib
+
+    bucket = int(hashlib.sha1(f"{prompt_name}:{session_id}".encode()).hexdigest(), 16) % 100
+    return "b" if bucket < max(0, min(100, b_pct)) else "a"
+
+
+def _record_ab_metrics(sid: str, review: ConsultationReview) -> None:
+    """Attach this consult's review verdict to any active prompt A/B test (Goal 13)."""
+    repo = get_repo()
+    for flag in repo.list_flags():
+        key = flag["key"]
+        if not (key.startswith("prompt.") and key.endswith(".ab") and flag.get("enabled")):
+            continue
+        name = key[len("prompt."):-len(".ab")]
+        b_pct = int((flag.get("value") or {}).get("b_pct", 0))
+        repo.record_ab_metric({
+            "prompt_name": name, "arm": _ab_arm(name, sid, b_pct), "session_id": sid,
+            "helpful": review.rating is ReviewRating.HELPFUL,
+            "error_categories": [c.value for c in review.error_categories],
+        })
 
 
 @app.get("/sessions/{sid}/reviews")
@@ -774,6 +816,131 @@ def advance_improvement(item_id: str, req: AdvanceImprovementRequest, principal:
     return item.model_dump(mode="json")
 
 
+# ── Goal 9: offline regression-eval harness (real engine behind the pipeline) ─────
+class EvalRequest(BaseModel):
+    candidate_prompt: str | None = None
+    dataset: str = "multispeaker@v1"
+    prompt_name: str = "relationship"
+
+
+@app.post("/admin/improvements/{item_id}/eval")
+def run_improvement_eval(item_id: str, req: EvalRequest, principal: Principal = Depends(get_principal)) -> dict:
+    """Run the golden dataset (optionally with a candidate prompt) and store the scores on
+    the improvement item. Pure offline — the candidate is never deployed here (Goal 9)."""
+    _require_role(principal, Role.ADMIN)
+    repo = get_repo()
+    if item_id not in repo.improvements:
+        raise HTTPException(status_code=404, detail="unknown improvement item")
+    from app.eval.runner import run_eval
+
+    try:
+        result = run_eval(
+            req.dataset, candidate_prompt=req.candidate_prompt,
+            prompt_name=req.prompt_name, llm=get_llm(get_settings()),
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"unknown dataset '{req.dataset}'")
+    repo.set_improvement_eval(item_id, result, regression_test_id=req.dataset)
+    get_audit_log().record(AuditEvent(
+        actor_id=principal.id, action="run_eval", resource="improvement",
+        detail=f"{item_id}:{req.dataset}:attribution={result['attribution']}",
+    ))
+    return result
+
+
+@app.get("/admin/improvements/{item_id}/eval")
+def get_improvement_eval(item_id: str, principal: Principal = Depends(get_principal)) -> dict:
+    _require_role(principal, Role.ADMIN, Role.AUDITOR)
+    repo = get_repo()
+    if item_id not in repo.improvements:
+        raise HTTPException(status_code=404, detail="unknown improvement item")
+    return repo.improvements[item_id].eval_results
+
+
+# ── Goal 13: prompt A/B (flag-routed candidate versions + outcome metrics) ────────
+class AbConfigRequest(BaseModel):
+    enabled: bool = True
+    b_version_id: str | None = None
+    b_pct: int = 0  # percent of consults routed to the candidate (arm B)
+
+
+@app.post("/admin/prompts/{name}/ab")
+def set_prompt_ab(name: str, req: AbConfigRequest, principal: Principal = Depends(get_principal)) -> dict:
+    _require_role(principal, Role.ADMIN)
+    flag = get_repo().set_flag(
+        f"prompt.{name}.ab", req.enabled,
+        {"b_version_id": req.b_version_id, "b_pct": max(0, min(100, req.b_pct))},
+    )
+    get_audit_log().record(AuditEvent(
+        actor_id=principal.id, action="set_prompt_ab", resource="feature_flag",
+        detail=f"{name}:{req.b_pct}%:{'on' if req.enabled else 'off'}",
+    ))
+    return flag
+
+
+@app.get("/admin/prompts/{name}/ab/metrics")
+def get_prompt_ab_metrics(name: str, principal: Principal = Depends(get_principal)) -> dict:
+    _require_role(principal, Role.ADMIN, Role.AUDITOR)
+    metrics = get_repo().list_ab_metrics(prompt_name=name)
+    arms: dict[str, dict] = {}
+    for arm in ("a", "b"):
+        rows = [m for m in metrics if m.get("arm") == arm]
+        n = len(rows)
+        helpful = sum(1 for m in rows if m.get("helpful"))
+        arms[arm] = {
+            "n": n, "helpful": helpful, "needs_improvement": n - helpful,
+            "needs_improvement_rate": round((n - helpful) / n, 3) if n else 0.0,
+        }
+    return {"prompt_name": name, "arms": arms, "total": len(metrics)}
+
+
+# ── Goals 4/12/13: admin error & latency analytics ───────────────────────────────
+@app.get("/admin/analytics/errors")
+def analytics_errors(principal: Principal = Depends(get_principal)) -> dict:
+    """Aggregate doctor feedback for the admin analytics tab (error categories, ratings,
+    inference-mode + confidence-band mix). Reads persisted reviews — no PHI."""
+    _require_role(principal, Role.ADMIN, Role.AUDITOR)
+    reviews = get_repo().list_reviews()
+    by_category: dict[str, int] = {}
+    by_rating: dict[str, int] = {}
+    by_mode: dict[str, int] = {}
+    for r in reviews:
+        by_rating[r.rating.value] = by_rating.get(r.rating.value, 0) + 1
+        for c in r.error_categories:
+            by_category[c.value] = by_category.get(c.value, 0) + 1
+        if r.inference_mode:
+            by_mode[r.inference_mode.value] = by_mode.get(r.inference_mode.value, 0) + 1
+    return {
+        "total_reviews": len(reviews),
+        "by_error_category": dict(sorted(by_category.items(), key=lambda kv: -kv[1])),
+        "by_rating": by_rating,
+        "by_inference_mode": by_mode,
+    }
+
+
+def _percentile(values: list[int], pct: float) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    k = max(0, min(len(ordered) - 1, int(round((pct / 100.0) * (len(ordered) - 1)))))
+    return ordered[k]
+
+
+@app.get("/admin/analytics/latency")
+def analytics_latency(principal: Principal = Depends(get_principal)) -> dict:
+    """Per-stage latency p50/p95 from recorded telemetry (Goal 12)."""
+    _require_role(principal, Role.ADMIN, Role.AUDITOR)
+    rows = get_repo().list_stage_latencies()
+    by_stage: dict[str, list[int]] = {}
+    for r in rows:
+        by_stage.setdefault(r.get("stage", "unknown"), []).append(int(r.get("latency_ms", 0)))
+    stages = {
+        stage: {"n": len(ms), "p50_ms": _percentile(ms, 50), "p95_ms": _percentile(ms, 95)}
+        for stage, ms in by_stage.items()
+    }
+    return {"stages": stages, "total": len(rows)}
+
+
 # ── Goal 10: prompt + model versioning ──────────────────────────────────────────
 @app.get("/prompts")
 def list_prompts(name: str | None = None, principal: Principal = Depends(get_principal)) -> list[dict]:
@@ -800,6 +967,8 @@ def create_prompt(req: NewPromptRequest, principal: Principal = Depends(get_prin
         content=req.content, active=req.activate, created_by=principal.id,
     )
     repo.add_prompt_version(pv)
+    if pv.active:
+        invalidate_prompts()  # a freshly-activated version must drive the pipeline now
     get_audit_log().record(AuditEvent(
         actor_id=principal.id, action="create_prompt", resource="prompt",
         detail=f"{pv.name}@{pv.version}",
@@ -814,6 +983,7 @@ def activate_prompt(prompt_id: str, principal: Principal = Depends(get_principal
         pv = get_repo().activate_prompt(prompt_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown prompt version")
+    invalidate_prompts()  # the pipeline reads active prompts via PromptProvider's cache
     get_audit_log().record(AuditEvent(
         actor_id=principal.id, action="activate_prompt", resource="prompt",
         detail=f"{pv.name}@{pv.version}",
@@ -875,6 +1045,7 @@ def ai_edit_apply(sid: str, req: AiEditApplyRequest, principal: Principal = Depe
         raise HTTPException(status_code=409, detail="no note to edit yet")
     known = {s.section_id for s in session.note.sections}
     repo = get_repo()
+    repo.drop_undone_edits(sid)  # applying a new edit starts a fresh branch (clears redo)
     for edit in req.changes:
         if edit.section_id not in known:
             raise HTTPException(status_code=422, detail=f"unknown section '{edit.section_id}'")
@@ -900,6 +1071,222 @@ def ai_edit_apply(sid: str, req: AiEditApplyRequest, principal: Principal = Depe
 def list_edits(sid: str, principal: Principal = Depends(get_principal)) -> list[dict]:
     _check(principal, Permission.EDIT_NOTE)
     return get_repo().list_edits(sid)
+
+
+def _apply_section_text(note, section_id: str, text: str) -> bool:
+    for section in note.sections:
+        if section.section_id == section_id:
+            section.content_text = text
+            section.empty = not (text or "").strip()
+            return True
+    return False
+
+
+def _undo_redo(sid: str, principal: Principal, *, redo: bool) -> dict:
+    _check(principal, Permission.EDIT_NOTE)
+    store = get_store()
+    if not store.exists(sid):
+        raise HTTPException(status_code=404, detail="unknown session")
+    session = store.get(sid)
+    if session.note is None:
+        raise HTTPException(status_code=409, detail="no note to edit yet")
+    repo = get_repo()
+    edits = repo.list_edits(sid)
+    if redo:
+        # Re-apply the earliest undone edit (LIFO relative to the undo order).
+        target = next((e for e in edits if e.get("undone")), None)
+        if target is None:
+            raise HTTPException(status_code=409, detail="nothing to redo")
+        _apply_section_text(session.note, target["section_id"], target.get("after", ""))
+        repo.set_edit_undone(sid, target["seq"], False)
+    else:
+        # Revert the most recent applied, not-yet-undone edit.
+        target = next((e for e in reversed(edits)
+                       if e.get("applied") and not e.get("undone")), None)
+        if target is None:
+            raise HTTPException(status_code=409, detail="nothing to undo")
+        _apply_section_text(session.note, target["section_id"], target.get("before", ""))
+        repo.set_edit_undone(sid, target["seq"], True)
+    store.persist(session)
+    get_audit_log().record(AuditEvent(
+        actor_id=principal.id, action="ai_edit_redo" if redo else "ai_edit_undo",
+        resource="note", session_id=sid, phi_accessed=True, detail=f"seq={target['seq']}",
+    ))
+    return {"session_id": sid, "state": session.state.value, "seq": target["seq"],
+            "note": session.note.model_dump(mode="json")}
+
+
+@app.post("/sessions/{sid}/ai-edit/undo")
+def ai_edit_undo(sid: str, principal: Principal = Depends(get_principal)) -> dict:
+    """Undo the most recent applied AI edit, restoring the prior section text (Goal 11)."""
+    return _undo_redo(sid, principal, redo=False)
+
+
+@app.post("/sessions/{sid}/ai-edit/redo")
+def ai_edit_redo(sid: str, principal: Principal = Depends(get_principal)) -> dict:
+    """Redo the most recently undone AI edit (Goal 11)."""
+    return _undo_redo(sid, principal, redo=True)
+
+
+# ── AI editor for the structured tabs (Extraction, Risk) ─────────────────────
+# Preview returns human-readable before/after `changes` for the UI plus the full
+# `proposed` object the apply route needs. Apply reuses the deterministic save paths
+# (extraction → rebuild_from_extraction; risk → re-score) so nothing is trusted blindly.
+
+def _flatten_extraction(extraction: ClinicalExtraction) -> dict[str, str]:
+    """Render each extraction field to a readable string for diffing/preview."""
+    out: dict[str, str] = {}
+    for key, val in extraction.to_data_map().items():
+        if val is None or val == [] or val == {}:
+            text = ""
+        elif isinstance(val, str):
+            text = val
+        elif isinstance(val, list):
+            text = "\n".join(
+                v if isinstance(v, str) else json.dumps(v, ensure_ascii=False) for v in val
+            )
+        elif isinstance(val, dict):
+            text = "\n".join(f"{k}: {v}" for k, v in val.items())
+        else:
+            text = str(val)
+        out[key] = text
+    return out
+
+
+def _extraction_changes(before: ClinicalExtraction, after: ClinicalExtraction) -> list[dict]:
+    b, a = _flatten_extraction(before), _flatten_extraction(after)
+    return [
+        {"section_id": key, "before": b.get(key, ""), "after": a.get(key, "")}
+        for key in a
+        if a.get(key, "") != b.get(key, "")
+    ]
+
+
+def _render_markers(markers: list[RiskMarker]) -> str:
+    return "\n".join(f"[{m.severity.value}] {m.type.value}: {m.message}" for m in markers)
+
+
+class AiEditProposalRequest(BaseModel):
+    instruction: str
+
+
+def _require_session_llm(sid: str):
+    """Shared guard for the structured AI-edit routes."""
+    if not get_settings().ai_edit_enabled:
+        raise HTTPException(status_code=403, detail="AI editor is disabled")
+    store = get_store()
+    if not store.exists(sid):
+        raise HTTPException(status_code=404, detail="unknown session")
+    return store, store.get(sid)
+
+
+@app.post("/sessions/{sid}/ai-edit/extraction")
+def ai_edit_extraction_preview(
+    sid: str, req: AiEditProposalRequest, principal: Principal = Depends(get_principal)
+) -> dict:
+    """Preview an AI edit of the structured extraction from a natural-language instruction."""
+    _check(principal, Permission.EDIT_NOTE)
+    _store, session = _require_session_llm(sid)
+    if session.extraction is None:
+        raise HTTPException(status_code=409, detail="no extraction to edit yet")
+    try:
+        proposed = propose_extraction_edit(session.extraction, req.instruction, get_llm(get_settings()))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"AI edit unavailable: {str(exc)[:200]}")
+    return {
+        "instruction": req.instruction,
+        "changes": _extraction_changes(session.extraction, proposed),
+        "proposed": proposed.model_dump(mode="json"),
+    }
+
+
+class AiEditExtractionApplyRequest(BaseModel):
+    instruction: str = ""
+    proposed: ClinicalExtraction
+
+
+@app.post("/sessions/{sid}/ai-edit/extraction/apply")
+def ai_edit_extraction_apply(
+    sid: str, req: AiEditExtractionApplyRequest, principal: Principal = Depends(get_principal)
+) -> dict:
+    """Apply an approved AI extraction edit, re-grounding + re-rendering the note (no LLM call)."""
+    _check(principal, Permission.EDIT_NOTE)
+    store, session = _require_session_llm(sid)
+    if session.extraction is None:
+        raise HTTPException(status_code=409, detail="no extraction to edit yet")
+    extraction = req.proposed
+    extraction.session_id = sid
+    template = get_registry().get(session.template_id)
+    result = rebuild_from_extraction(
+        extraction, template, session.clean_transcript,
+        session.risk or RiskAssessment(session_id=sid), get_settings(),
+        profile=session.conversation_profile,
+    )
+    session.extraction = result.extraction
+    session.note = result.note
+    store.set_result(sid, result)
+    _advance_to_edited(session)
+    store.persist(session)
+    get_audit_log().record(AuditEvent(
+        actor_id=principal.id, action="ai_edit_extraction", resource="extraction",
+        session_id=sid, phi_accessed=True, detail=req.instruction[:120],
+    ))
+    return {
+        "session_id": sid, "state": session.state.value,
+        "extraction": result.extraction.model_dump(mode="json"),
+        "note": result.note.model_dump(mode="json"),
+        "grounding": result.grounding.model_dump(mode="json"),
+    }
+
+
+@app.post("/sessions/{sid}/ai-edit/risk")
+def ai_edit_risk_preview(
+    sid: str, req: AiEditProposalRequest, principal: Principal = Depends(get_principal)
+) -> dict:
+    """Preview an AI edit of the risk markers from a natural-language instruction."""
+    _check(principal, Permission.EDIT_NOTE)
+    _store, session = _require_session_llm(sid)
+    if session.risk is None:
+        raise HTTPException(status_code=409, detail="no risk assessment to edit yet")
+    try:
+        markers = propose_risk_edit(session.risk, req.instruction, get_llm(get_settings()))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"AI edit unavailable: {str(exc)[:200]}")
+    return {
+        "instruction": req.instruction,
+        "changes": [{
+            "section_id": "risk_markers",
+            "before": _render_markers(session.risk.markers),
+            "after": _render_markers(markers),
+        }],
+        "proposed": [m.model_dump(mode="json") for m in markers],
+    }
+
+
+class AiEditRiskApplyRequest(BaseModel):
+    instruction: str = ""
+    proposed: list[RiskMarker] = []
+
+
+@app.post("/sessions/{sid}/ai-edit/risk/apply")
+def ai_edit_risk_apply(
+    sid: str, req: AiEditRiskApplyRequest, principal: Principal = Depends(get_principal)
+) -> dict:
+    """Apply approved AI risk-marker edits and re-score (never touches note/extraction)."""
+    _check(principal, Permission.EDIT_NOTE)
+    store, session = _require_session_llm(sid)
+    if session.risk is None:
+        raise HTTPException(status_code=409, detail="no risk assessment to edit yet")
+    session.risk = RiskAssessment(
+        session_id=sid, markers=req.proposed, score=aggregate_score(req.proposed),
+    )
+    _advance_to_edited(session)
+    store.persist(session)
+    get_audit_log().record(AuditEvent(
+        actor_id=principal.id, action="ai_edit_risk", resource="risk",
+        session_id=sid, phi_accessed=True, detail=req.instruction[:120],
+    ))
+    return {"session_id": sid, "state": session.state.value, "risk": session.risk.model_dump(mode="json")}
 
 
 # ── Prescription preview: hospital document templates ────────────────────────────

@@ -31,10 +31,15 @@ class Settings(BaseSettings):
     # Batch API (with_diarization) → accurate, speaker-labeled transcript.
     sarvam_api_key: str = ""
     sarvam_stt_model: str = "saaras:v3"        # saaras:v3 = speech→English
-    sarvam_mode: str = "translate"             # translate → English output
+    # Capture mode. 'codemix' keeps the spoken words (Indic words romanized, English kept)
+    # so Telugu/code-mixed nouns survive instead of being force-translated and mangled
+    # (e.g. "mamidi kaya" -> "Vermicelli"); the LLM still writes an English note. Other
+    # options: 'translate' (everything→English), 'transcribe' (native script), 'translit',
+    # 'verbatim'. Override via SCRIBE_SARVAM_MODE.
+    sarvam_mode: str = "codemix"
     sarvam_language_code: str = "unknown"      # 'unknown' → auto-detect input language
     sarvam_diarize: bool = True                # use Batch API for doctor/patient labels
-    sarvam_num_speakers: int = 2               # doctor + patient
+    sarvam_num_speakers: int = 3               # doctor + patient
     sarvam_poll_interval_s: int = 1            # batch-job poll cadence; lower = less tail latency
     sarvam_batch_timeout_s: int = 600
     # Real-time streaming STT (WebSocket consult path). Streaming has no diarization, so
@@ -61,7 +66,8 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = 8192
     # Gemini "thinking" budget in tokens. 0 disables thinking entirely on Flash/
     # Flash-Lite (lowest latency for pure structuring); -1 = dynamic; Pro ignores 0
-    # and clamps to its minimum. Override per-deployment via SCRIBE_LLM_THINKING_BUDGET.
+    # and clamps to its minimum (the client self-heals a 400 by retrying without it).
+    # Default 0 for the fastest structuring path. Override via SCRIBE_LLM_THINKING_BUDGET.
     llm_thinking_budget: int = 0
     # Latency: when True, clean + extract + risk are produced in ONE Gemini call instead
     # of three (the dominant cost is per-call round-trip latency, not tokens). Falls back

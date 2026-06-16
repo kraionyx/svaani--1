@@ -27,6 +27,7 @@ from app.schemas.note import ConsultationNote
 from app.schemas.risk import RiskAssessment
 from app.schemas.template import TemplateDefinition
 from app.schemas.transcript import CleanTranscript, RawTranscript
+from app.stt.doctor_detect import assign_clinical_roles
 from app.validation.fidelity import verify_medication_fidelity
 from app.validation.grounding import GroundingReport, ground_extraction
 
@@ -85,6 +86,12 @@ def run_pipeline(
     settings = settings or get_settings()
     llm = llm or get_llm(settings)
 
+    # Goal 1 (hardening): decide WHO the clinician is by behavior before anything downstream
+    # inherits a wrong speaker-order label (e.g. the patient/caregiver spoke first). Cheap,
+    # deterministic, no extra round-trip.
+    if settings.resolve_subjects:
+        assign_clinical_roles(raw)
+
     clean, extraction, risk_markers = _analyze(raw, llm, settings)
 
     # Goal 1: resolve WHO the consult is about before grounding the note, so symptoms
@@ -97,6 +104,8 @@ def run_pipeline(
         # resolver's answer so the note always knows whose record this is.
         if not extraction.referenced_patient and profile.referenced_patient:
             extraction.referenced_patient = profile.referenced_patient
+        if not extraction.referenced_subjects and profile.referenced_subjects:
+            extraction.referenced_subjects = [s.label for s in profile.referenced_subjects]
 
     valid_spans = raw.segment_ids() | clean.segment_ids()
     extraction, grounding = ground_extraction(

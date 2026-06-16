@@ -1,0 +1,15 @@
+{
+  "id": "speaking-for-father",
+  "description": "Explicit proxy: 'I am speaking for my father' => patient is the father.",
+  "transcript": [
+    {"speaker": "speaker_0", "text": "Tell me about the problem."},
+    {"speaker": "speaker_1", "text": "I am speaking for my father, he has chest pain."},
+    {"speaker": "speaker_0", "text": "How long has he had it?"},
+    {"speaker": "speaker_1", "text": "Since this morning."}
+  ],
+  "expect": {
+    "doctor_label": "speaker_0",
+    "referenced_patient": "father",
+    "has_roles": ["doctor", "caregiver"]
+  }
+}

@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from app.config import Settings
 from app.llm.base import MedicalLLM
-from app.pipeline.prompts import CLEAN_INSTRUCTION, SCRIBE_SYSTEM
+from app.pipeline.prompt_provider import get_prompt
+from app.pipeline.prompts import SCRIBE_SYSTEM
 from app.schemas.transcript import CleanTranscript, RawTranscript
 from app.validation.confidence import low_confidence_span_ids
 
@@ -21,7 +22,7 @@ def clean_transcript(raw: RawTranscript, llm: MedicalLLM, settings: Settings) ->
         )
 
     prompt = (
-        f"{CLEAN_INSTRUCTION}\n\nRaw transcript (JSON):\n{raw.model_dump_json(indent=2)}"
+        f"{get_prompt('clean')}\n\nRaw transcript (JSON):\n{raw.model_dump_json(indent=2)}"
     )
     try:
         clean = llm.generate_structured(prompt, CleanTranscript, system=SCRIBE_SYSTEM)
