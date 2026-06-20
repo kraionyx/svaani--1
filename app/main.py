@@ -296,6 +296,16 @@ def _process(session: ConsultationSession, raw: RawTranscript, principal: Princi
         "stage": "pipeline", "session_id": session.session_id, "latency_ms": _pipeline_ms,
         "inference_mode": session.inference_mode, "model_version": session.model_version,
     })
+    # Per-stage breakdown (analyze / note / risk) so the latency tab can attribute the
+    # wall-clock to a stage instead of one opaque 'pipeline' number (the dominant cost is
+    # the LLM 'analyze' call). 'total' is omitted here — 'pipeline' already covers it.
+    for _stage, _ms in (result.timings_ms or {}).items():
+        if _stage == "total":
+            continue
+        repo.record_stage_latency({
+            "stage": _stage, "session_id": session.session_id, "latency_ms": _ms,
+            "inference_mode": session.inference_mode, "model_version": session.model_version,
+        })
     get_store().set_result(session.session_id, result)
     if session.state is ReviewState.PROCESSING:
         session.transition(ReviewState.DRAFT)

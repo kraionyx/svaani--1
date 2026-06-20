@@ -7,9 +7,10 @@ from grounded items.
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from app.llm.base import MedicalLLM, get_llm
@@ -41,6 +42,10 @@ class PipelineResult(BaseModel):
     # Goal 1/2/4 — who is in the room, complexity, and confidence. None when subject
     # resolution is disabled. Never carries clinical content.
     profile: ConversationProfile | None = None
+    # Wall-clock latency of each pipeline stage in milliseconds (analyze / note / risk /
+    # total). Used by the analytics latency tab and the batch-mode benchmark to break the
+    # total down by stage. Never carries clinical content.
+    timings_ms: dict[str, int] = Field(default_factory=dict)
 
 
 logger = logging.getLogger("svaani.pipeline")
@@ -86,13 +91,18 @@ def run_pipeline(
     settings = settings or get_settings()
     llm = llm or get_llm(settings)
 
+    timings_ms: dict[str, int] = {}
+    _t_total = time.perf_counter()
+
     # Goal 1 (hardening): decide WHO the clinician is by behavior before anything downstream
     # inherits a wrong speaker-order label (e.g. the patient/caregiver spoke first). Cheap,
     # deterministic, no extra round-trip.
     if settings.resolve_subjects:
         assign_clinical_roles(raw)
 
+    _t0 = time.perf_counter()
     clean, extraction, risk_markers = _analyze(raw, llm, settings)
+    timings_ms["analyze"] = int((time.perf_counter() - _t0) * 1000)
 
     # Goal 1: resolve WHO the consult is about before grounding the note, so symptoms
     # are attributed to the referenced patient (e.g. 'son') and not the speaker (mother).
@@ -117,16 +127,23 @@ def run_pipeline(
     # that normalized '1 mg' -> '40 mg' or renamed a drug). Non-destructive — it flags.
     grounding.verified, grounding.mismatched = verify_medication_fidelity(extraction, clean)
 
+    _t0 = time.perf_counter()
     note = generate_note(extraction, template)
     if settings.narrative_notes:
         # Faithful rephrasing of grounded section content into clinical prose. No-op
         # without an LLM; failure leaves the deterministic text untouched.
         note = narrate_note(note, llm)
+    timings_ms["note"] = int((time.perf_counter() - _t0) * 1000)
+
+    _t0 = time.perf_counter()
     risk = assess_risk(clean, extraction, llm, settings, llm_markers=risk_markers)
+    timings_ms["risk"] = int((time.perf_counter() - _t0) * 1000)
+
+    timings_ms["total"] = int((time.perf_counter() - _t_total) * 1000)
 
     return PipelineResult(
         clean=clean, extraction=extraction, grounding=grounding, note=note, risk=risk,
-        profile=profile,
+        profile=profile, timings_ms=timings_ms,
     )
 
 

@@ -1,0 +1,103 @@
+{
+  "id": "cardiology-cad-suspected",
+  "description": "Real cardiology consult (Dr. Reddy / patient Suresh / wife Lakshmi). Reference (clean) transcript with correct speaker labels, so scoring isolates LLM extraction from STT/diarization errors. Decision-critical content: PMH (diabetes 8y, HTN, smoking), family history (father bypass @52), investigation values (ST depression, TMT positive, EF 48%, LDL 168, low HDL, high triglycerides, LVH), and a SUSPECTED myocardial ischemia (not confirmed).",
+  "transcript": [
+    {"speaker": "speaker_0", "text": "Namaskaram Suresh garu, please sit down. Mee recent ECG, 2D Echo, Troponin-I, and TMT reports chusanu. What symptoms are you experiencing?"},
+    {"speaker": "speaker_1", "text": "Namaste doctor. Last 2 months nunchi chest lo tightness untundi, especially stairs ekkinappudu. Konchem breathlessness kuda vastundi. Sometimes left shoulder varaku pain radiate avutundi."},
+    {"speaker": "speaker_0", "text": "Hmm. Aa pain pressure laga untunda leda sharp ga untunda?"},
+    {"speaker": "speaker_1", "text": "Mostly pressure laga untundi doctor. Around 5 to 10 minutes untundi. Rest teesukunte taggipothundi."},
+    {"speaker": "speaker_2", "text": "Doctor, last week night sudden ga sweating kuda vachindi. Chala bayapaddam. Ayana face kuda pale ga ayipoyindi."},
+    {"speaker": "speaker_0", "text": "Excessive sweating during chest discomfort is important. Suresh garu, diabetes, hypertension, leda hyperlipidemia history unda?"},
+    {"speaker": "speaker_1", "text": "Avunu doctor. Naaku 8 years nunchi diabetes undi. BP medicines kuda vadutunnanu."},
+    {"speaker": "speaker_0", "text": "Smoking history unda?"},
+    {"speaker": "speaker_1", "text": "Earlier daily one pack smoke chesevadu. Last year nunchi reduce chesanu kani completely stop cheyyaledu."},
+    {"speaker": "speaker_0", "text": "Okay. Mee ECG lo mild ST-segment depression kanipinchindi. TMT positive vachindi, which suggests myocardial ischemia possibility."},
+    {"speaker": "speaker_1", "text": "Doctor, myocardial ischemia ante exact ga enti?"},
+    {"speaker": "speaker_0", "text": "Simple ga cheppali ante, heart muscle ki blood supply adequate ga reach avvakapovadam. Usually coronary arteries lo atherosclerotic plaque buildup valla ila jarugutundi."},
+    {"speaker": "speaker_2", "text": "Ante heart attack vachinatte na doctor?"},
+    {"speaker": "speaker_0", "text": "Not necessarily. Heart attack, medically myocardial infarction, occurs when blood flow severely or completely blocks. Ischemia is more like a warning sign."},
+    {"speaker": "speaker_1", "text": "Echo report lo 'Left Ventricular Hypertrophy' ani undi. Adi dangerous aa?"},
+    {"speaker": "speaker_0", "text": "Left Ventricular Hypertrophy, or LVH, ante heart left ventricle wall thick avvadam. Long-standing hypertension valla idi develop avvachu."},
+    {"speaker": "speaker_1", "text": "Adi reverse avutunda doctor?"},
+    {"speaker": "speaker_0", "text": "BP proper ga control chesthe progression slow cheyyachu. Konni cases lo improvement kuda untundi."},
+    {"speaker": "speaker_2", "text": "Doctor, report lo ejection fraction 48% ani undi. Normal enti?"},
+    {"speaker": "speaker_0", "text": "Normal ejection fraction usually 55% to 70% madhya untundi. Mee husband di slightly reduced. Severe kaadu kani monitor cheyyali."},
+    {"speaker": "speaker_1", "text": "Nenu morning walk chestanu. Kani recent ga 500 meters nadichina taruvata fatigue vastundi."},
+    {"speaker": "speaker_0", "text": "That correlates with reduced exercise tolerance. We need to investigate coronary artery disease further."},
+    {"speaker": "speaker_1", "text": "Angiography avasaram aa doctor?"},
+    {"speaker": "speaker_0", "text": "Considering your symptoms, positive stress test, diabetes, and family history, coronary angiography is strongly recommended."},
+    {"speaker": "speaker_2", "text": "Angiography dangerous procedure aa?"},
+    {"speaker": "speaker_0", "text": "Very low risk procedure. We insert a catheter through radial artery or femoral artery and visualize coronary circulation using contrast dye."},
+    {"speaker": "speaker_1", "text": "Blockages unte next step enti?"},
+    {"speaker": "speaker_0", "text": "Depends on severity. Mild lesions medication tho manage cheyyachu. Significant stenosis unte angioplasty with stent placement or sometimes coronary artery bypass grafting, CABG, recommend chestam."},
+    {"speaker": "speaker_1", "text": "Na father ki 52 years age lo bypass surgery ayyindi doctor."},
+    {"speaker": "speaker_0", "text": "Family history is another significant cardiovascular risk factor."},
+    {"speaker": "speaker_2", "text": "Cholesterol reports ela unnayi doctor?"},
+    {"speaker": "speaker_0", "text": "LDL cholesterol 168 mg/dL undi, which is elevated. Triglycerides kuda high unnayi. HDL matram takkuva undi."},
+    {"speaker": "speaker_1", "text": "Ante medicines start cheyyala?"},
+    {"speaker": "speaker_0", "text": "Yes. High-intensity statin therapy recommend chestanu. Along with antiplatelet medication and optimization of diabetes management."},
+    {"speaker": "speaker_1", "text": "Salt tagginchala?"},
+    {"speaker": "speaker_0", "text": "Definitely. Low sodium diet, Mediterranean-style nutrition, regular aerobic activity, smoking cessation, and weight reduction are crucial."},
+    {"speaker": "speaker_2", "text": "Doctor, konni rojulu ga ayana heartbeat fast ga anipistundi ani cheptunnaru."},
+    {"speaker": "speaker_0", "text": "Palpitations unnaya?"},
+    {"speaker": "speaker_1", "text": "Avunu. Especially night time lo. Heart skip ayinattu feel avutundi."},
+    {"speaker": "speaker_0", "text": "We should perform a 24-hour Holter monitoring study to evaluate for arrhythmias such as atrial fibrillation, supraventricular tachycardia, or premature ventricular contractions."},
+    {"speaker": "speaker_1", "text": "Arrhythmia dangerous aa doctor?"},
+    {"speaker": "speaker_0", "text": "Some arrhythmias harmless untayi. Kani konni stroke risk leda sudden cardiac complications ki lead avvachu, so proper evaluation important."},
+    {"speaker": "speaker_2", "text": "Emergency signs enti doctor?"},
+    {"speaker": "speaker_0", "text": "Severe chest pain lasting more than 15 minutes, pain radiating to jaw or left arm, profuse sweating, dizziness, syncope, or severe breathlessness unte immediately emergency department ki vellandi."},
+    {"speaker": "speaker_1", "text": "Okay doctor. Konchem tension ga undi."},
+    {"speaker": "speaker_0", "text": "Understandable. Kani good news enti ante symptoms ni early stage lo identify chesam. Proper treatment and lifestyle changes follow ayithe prognosis generally favorable untundi."},
+    {"speaker": "speaker_1", "text": "Thank you doctor."},
+    {"speaker": "speaker_2", "text": "Thank you doctor garu."},
+    {"speaker": "speaker_0", "text": "You're welcome. Angiography schedule cheddam, and meanwhile medicines regular ga continue cheyyandi."}
+  ],
+  "expect": {
+    "referenced_patient": "patient",
+    "has_roles": ["doctor", "patient", "caregiver"],
+    "facts": {
+      "chief_complaints": [
+        {"name": "chest tightness", "aliases": ["chest", "tightness"]},
+        {"name": "breathlessness", "aliases": ["breathless", "dyspn"]},
+        {"name": "left shoulder radiation", "aliases": ["shoulder", "radiat"]},
+        {"name": "palpitations", "aliases": ["palpitation", "heartbeat fast", "skip"]}
+      ],
+      "past_medical_history": [
+        {"name": "diabetes 8 years", "aliases": ["diabetes", "diabetic"], "numbers": ["8"]},
+        {"name": "hypertension", "aliases": ["hypertension", "blood pressure", "bp med"]},
+        {"name": "smoking history", "aliases": ["smok", "pack"]}
+      ],
+      "family_history": [
+        {"name": "father bypass at 52", "aliases": ["father", "bypass"], "numbers": ["52"]}
+      ],
+      "investigations": [
+        {"name": "ST-segment depression", "aliases": ["st-segment", "st segment", "st depression"]},
+        {"name": "TMT positive", "aliases": ["tmt", "stress test", "treadmill"], "must": "positive"},
+        {"name": "ejection fraction 48%", "aliases": ["ejection fraction", "ef "], "numbers": ["48"]},
+        {"name": "LDL 168", "aliases": ["ldl"], "numbers": ["168"]},
+        {"name": "HDL low", "aliases": ["hdl"]},
+        {"name": "triglycerides high", "aliases": ["triglyceride"]},
+        {"name": "LVH on echo", "aliases": ["lvh", "left ventricular hypertrophy", "hypertrophy"]}
+      ],
+      "assessment_suspected": [
+        {"name": "suspected myocardial ischemia", "aliases": ["ischemia", "ischaemia"]},
+        {"name": "concerning for CAD", "aliases": ["coronary artery disease", "cad"]}
+      ],
+      "diagnosis_confirmed": [
+        {"name": "left ventricular hypertrophy", "aliases": ["lvh", "left ventricular hypertrophy", "hypertrophy"]},
+        {"name": "dyslipidemia", "aliases": ["dyslipidemia", "dyslipidaemia", "cholesterol", "lipid"]}
+      ],
+      "treatment_plan": [
+        {"name": "coronary angiography", "aliases": ["angiography"]},
+        {"name": "Holter monitor", "aliases": ["holter", "24-hour", "24 hour"]},
+        {"name": "high-intensity statin", "aliases": ["statin"]},
+        {"name": "antiplatelet", "aliases": ["antiplatelet", "anti-platelet", "anti platelet"]},
+        {"name": "lifestyle modification", "aliases": ["low sodium", "mediterranean", "smoking cessation", "weight reduction", "aerobic"]}
+      ],
+      "differentials": [
+        {"name": "arrhythmia differential", "aliases": ["atrial fibrillation", "supraventricular", "premature ventricular", "af", "svt", "pvc"]}
+      ]
+    },
+    "numbers_must_survive": ["8", "48", "168", "52", "500", "15"]
+  }
+}

@@ -1,19 +1,19 @@
 {
-  "template_id": "ortho",
-  "name": "Orthopedic Template",
+  "template_id": "general_medicine",
+  "name": "General Medicine Template",
   "version": 1,
-  "hospital_id": "hosp_d",
-  "description": "Orthopedic consultation note.",
+  "hospital_id": null,
+  "description": "Full medical consultation note with history, family history, investigations and a suspected-vs-confirmed assessment/diagnosis split. Suited to internal medicine / cardiology consults where past history, risk factors and investigation values are decision-critical.",
   "sections": [
     { "id": "patient_info", "component": "PATIENT_INFORMATION", "label": "Patient Information", "enabled": true, "order": 1 },
     { "id": "chief_complaints", "component": "CHIEF_COMPLAINTS", "label": "Chief Complaints", "enabled": true, "order": 2 },
     { "id": "hpi", "component": "HISTORY_OF_PRESENT_ILLNESS", "label": "History of Present Illness", "enabled": true, "order": 3 },
-    { "id": "pmh", "component": "PAST_MEDICAL_HISTORY", "label": "Past Medical History", "enabled": true, "order": 4 },
+    { "id": "pmh", "component": "PAST_MEDICAL_HISTORY", "label": "Past Medical History & Risk Factors", "enabled": true, "order": 4 },
     { "id": "family_history", "component": "FAMILY_HISTORY", "label": "Family History", "enabled": true, "order": 5 },
     { "id": "examination", "component": "EXAMINATION", "label": "Examination", "enabled": true, "order": 6 },
     { "id": "investigations", "component": "INVESTIGATIONS", "label": "Investigations", "enabled": true, "order": 7 },
-    { "id": "assessment", "component": "ASSESSMENT", "label": "Assessment", "enabled": true, "order": 8 },
-    { "id": "diagnosis", "component": "DIAGNOSIS", "label": "Diagnosis", "enabled": true, "order": 9 },
+    { "id": "assessment", "component": "ASSESSMENT", "label": "Assessment (suspected / impression)", "enabled": true, "order": 8 },
+    { "id": "diagnosis", "component": "DIAGNOSIS", "label": "Diagnosis (confirmed)", "enabled": true, "order": 9 },
     { "id": "plan", "component": "TREATMENT_PLAN", "label": "Treatment Plan", "enabled": true, "order": 10 },
     { "id": "follow_up", "component": "FOLLOW_UP", "label": "Follow-up", "enabled": true, "order": 11 }
   ]

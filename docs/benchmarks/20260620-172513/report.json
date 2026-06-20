@@ -1,0 +1,389 @@
+{
+  "mode": "single",
+  "result": {
+    "n_cases": 1,
+    "scorecard": {
+      "Symptoms": 0.0,
+      "Past Medical History / Risk Factors": 0.0,
+      "Family History": 0.0,
+      "Investigations": 0.0,
+      "Assessment (suspected)": 0.0,
+      "Diagnosis (confirmed)": 0.0,
+      "Treatment Plan": 0.0,
+      "Differentials": 0.0,
+      "Numeric Preservation": 0.0,
+      "Certainty": 0.0,
+      "Speaker Attribution": 0.25
+    },
+    "overall": 0.023,
+    "dataset": "clinical@v1",
+    "template_id": "general_medicine",
+    "mock": true,
+    "model": "mock",
+    "repeat": 1,
+    "candidate_prompt": false,
+    "latency": {
+      "analyze": {
+        "n": 1,
+        "p50_ms": 2,
+        "p95_ms": 2,
+        "mean_ms": 2,
+        "max_ms": 2
+      },
+      "note": {
+        "n": 1,
+        "p50_ms": 0,
+        "p95_ms": 0,
+        "mean_ms": 0,
+        "max_ms": 0
+      },
+      "risk": {
+        "n": 1,
+        "p50_ms": 2,
+        "p95_ms": 2,
+        "mean_ms": 2,
+        "max_ms": 2
+      },
+      "total": {
+        "n": 1,
+        "p50_ms": 12,
+        "p95_ms": 12,
+        "mean_ms": 12,
+        "max_ms": 12
+      }
+    },
+    "cases": [
+      {
+        "id": "cardiology-cad-suspected",
+        "categories": {
+          "chief_complaints": {
+            "label": "Symptoms",
+            "total": 4,
+            "hit": 0,
+            "captured_anywhere": 0,
+            "recall": 0.0,
+            "lenient_recall": 0.0,
+            "items": [
+              {
+                "name": "chest tightness",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "breathlessness",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "left shoulder radiation",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "palpitations",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              }
+            ]
+          },
+          "past_medical_history": {
+            "label": "Past Medical History / Risk Factors",
+            "total": 3,
+            "hit": 0,
+            "captured_anywhere": 0,
+            "recall": 0.0,
+            "lenient_recall": 0.0,
+            "items": [
+              {
+                "name": "diabetes 8 years",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": true,
+                "number_hit": false
+              },
+              {
+                "name": "hypertension",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "smoking history",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              }
+            ]
+          },
+          "family_history": {
+            "label": "Family History",
+            "total": 1,
+            "hit": 0,
+            "captured_anywhere": 0,
+            "recall": 0.0,
+            "lenient_recall": 0.0,
+            "items": [
+              {
+                "name": "father bypass at 52",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": true,
+                "number_hit": false
+              }
+            ]
+          },
+          "investigations": {
+            "label": "Investigations",
+            "total": 7,
+            "hit": 0,
+            "captured_anywhere": 1,
+            "recall": 0.0,
+            "lenient_recall": 0.143,
+            "items": [
+              {
+                "name": "ST-segment depression",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "TMT positive",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "ejection fraction 48%",
+                "hit": false,
+                "captured_anywhere": true,
+                "has_numbers": true,
+                "number_hit": false
+              },
+              {
+                "name": "LDL 168",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": true,
+                "number_hit": false
+              },
+              {
+                "name": "HDL low",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "triglycerides high",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "LVH on echo",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              }
+            ]
+          },
+          "assessment_suspected": {
+            "label": "Assessment (suspected)",
+            "total": 2,
+            "hit": 0,
+            "captured_anywhere": 0,
+            "recall": 0.0,
+            "lenient_recall": 0.0,
+            "items": [
+              {
+                "name": "suspected myocardial ischemia",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "concerning for CAD",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              }
+            ]
+          },
+          "diagnosis_confirmed": {
+            "label": "Diagnosis (confirmed)",
+            "total": 2,
+            "hit": 0,
+            "captured_anywhere": 0,
+            "recall": 0.0,
+            "lenient_recall": 0.0,
+            "items": [
+              {
+                "name": "left ventricular hypertrophy",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "dyslipidemia",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              }
+            ]
+          },
+          "treatment_plan": {
+            "label": "Treatment Plan",
+            "total": 5,
+            "hit": 0,
+            "captured_anywhere": 0,
+            "recall": 0.0,
+            "lenient_recall": 0.0,
+            "items": [
+              {
+                "name": "coronary angiography",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "Holter monitor",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "high-intensity statin",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "antiplatelet",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              },
+              {
+                "name": "lifestyle modification",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              }
+            ]
+          },
+          "differentials": {
+            "label": "Differentials",
+            "total": 1,
+            "hit": 0,
+            "captured_anywhere": 0,
+            "recall": 0.0,
+            "lenient_recall": 0.0,
+            "items": [
+              {
+                "name": "arrhythmia differential",
+                "hit": false,
+                "captured_anywhere": false,
+                "has_numbers": false,
+                "number_hit": null
+              }
+            ]
+          }
+        },
+        "numeric_fidelity": {
+          "total": 6,
+          "survived": 0,
+          "lost": [
+            "8",
+            "48",
+            "168",
+            "52",
+            "500",
+            "15"
+          ],
+          "score": 0.0
+        },
+        "certainty": {
+          "suspected_in_assessment_recall": 0.0,
+          "upgraded_to_confirmed": [],
+          "score": 0.0
+        },
+        "attribution": {
+          "score": 0.25,
+          "checks": {
+            "referenced_patient": true,
+            "role:speaker_0": false,
+            "role:speaker_1": false,
+            "role:speaker_2": false
+          }
+        },
+        "headline": {
+          "Symptoms": 0.0,
+          "Past Medical History / Risk Factors": 0.0,
+          "Family History": 0.0,
+          "Investigations": 0.0,
+          "Assessment (suspected)": 0.0,
+          "Diagnosis (confirmed)": 0.0,
+          "Treatment Plan": 0.0,
+          "Differentials": 0.0,
+          "Numeric Preservation": 0.0,
+          "Certainty": 0.0,
+          "Speaker Attribution": 0.25
+        },
+        "overall": 0.023,
+        "latency": {
+          "analyze": {
+            "n": 1,
+            "p50_ms": 2,
+            "p95_ms": 2,
+            "mean_ms": 2,
+            "max_ms": 2
+          },
+          "note": {
+            "n": 1,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "mean_ms": 0,
+            "max_ms": 0
+          },
+          "risk": {
+            "n": 1,
+            "p50_ms": 2,
+            "p95_ms": 2,
+            "mean_ms": 2,
+            "max_ms": 2
+          },
+          "total": {
+            "n": 1,
+            "p50_ms": 12,
+            "p95_ms": 12,
+            "mean_ms": 12,
+            "max_ms": 12
+          }
+        }
+      }
+    ]
+  }
+}
