@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Backend: lint + typecheck + test ────────────────────────────────────────
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      # Tests must run with no external credentials — mocks only.
+      SCRIBE_STORE_BACKEND: memory
+      SCRIBE_AUTH_MODE: dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint (ruff)
+        run: |
+          pip install ruff --quiet
+          ruff check app/ tests/ --output-format=github
+        continue-on-error: true   # advisory until the codebase is lint-clean
+
+      - name: Type check (pyright)
+        run: |
+          pip install pyright --quiet
+          pyright app/ --outputjson | python -c "
+          import sys, json
+          r = json.load(sys.stdin)
+          errors = [d for d in r.get('generalDiagnostics',[]) if d['severity']=='error']
+          print(f'pyright: {len(errors)} errors, {len(r.get(\"generalDiagnostics\",[]))-len(errors)} warnings')
+          sys.exit(0)   # advisory
+          " || true
+        continue-on-error: true
+
+      - name: Test (pytest)
+        run: pytest -q --tb=short
+
+      - name: Coverage (optional)
+        run: |
+          pip install pytest-cov --quiet
+          pytest -q --tb=short --cov=app --cov-report=term-missing --cov-fail-under=0
+        continue-on-error: true
+
+  # ── Frontend: typecheck + build ─────────────────────────────────────────────
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web-app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build

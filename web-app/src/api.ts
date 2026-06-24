@@ -16,7 +16,15 @@ export const WS_BASE = (() => {
 export let ROLE = localStorage.getItem('svaani-role') || 'doctor';
 export const setRole = (r: string) => { ROLE = r; localStorage.setItem('svaani-role', r); };
 
+// Supabase access token, kept in sync by the AuthProvider (auth.tsx). When present we send
+// it as a verified Bearer token; when absent we fall back to the dev header scaffold so the
+// app still works in SCRIBE_AUTH_MODE=dev with no login.
+let ACCESS_TOKEN: string | null = null;
+export const setAuthToken = (t: string | null) => { ACCESS_TOKEN = t; };
+export const getAuthToken = () => ACCESS_TOKEN;
+
 function headers(extra: Record<string, string> = {}) {
+  if (ACCESS_TOKEN) return { Authorization: `Bearer ${ACCESS_TOKEN}`, ...extra };
   return { 'X-User-Id': 'dashboard', 'X-Role': ROLE, ...extra };
 }
 
@@ -24,7 +32,11 @@ export async function api<T = any>(path: string, opts: RequestInit = {}): Promis
   const r = await fetch(API_BASE + path, { ...opts, headers: headers((opts.headers as any) || {}) });
   if (!r.ok) {
     let d: any; try { d = await r.json(); } catch { d = { detail: r.statusText }; }
-    throw new Error(d.detail || `HTTP ${r.status}`);
+    const det = d.detail;
+    const msg = typeof det === 'string' ? det
+      : Array.isArray(det) ? det.map((e: any) => e.msg || JSON.stringify(e)).join('; ')
+      : `HTTP ${r.status}`;
+    throw new Error(msg);
   }
   return (r.headers.get('content-type') || '').includes('json') ? r.json() : (r as any);
 }
@@ -71,6 +83,14 @@ export type ReviewState = 'listening' | 'processing' | 'draft' | 'in_review' | '
 // ── REST calls ───────────────────────────────────────────────────────────────
 export const getHealth = () => api<{ sarvam: string; vertex: string }>('/health');
 export const listTemplates = () => api<{ template_id: string; name: string }[]>('/templates');
+
+// ── My consultations (per-user) ───────────────────────────────────────────────
+export interface SessionSummary {
+  session_id: string; state: ReviewState; template_id: string | null;
+  signed_by_name?: string | null; has_note?: boolean | null;
+  created_at?: string | null; updated_at?: string | null;
+}
+export const listSessions = () => api<SessionSummary[]>('/sessions');
 export const createSession = (template_id: string, mode: 'realtime' | 'batch' | 'auto' | 'hybrid' = 'realtime') =>
   api<{ session_id: string; state: ReviewState }>('/sessions', jsonBody({ template_id, mode }));
 export const simulate = (sid: string) => api(`/sessions/${sid}/simulate`, { method: 'POST' });

@@ -16,8 +16,13 @@ ADMIN = {"X-User-Id": "adm", "X-Role": "admin"}
 @pytest.fixture(autouse=True)
 def _hermetic(monkeypatch):
     # Force the disabled LLM so the pipeline is deterministic, and reset the in-memory
-    # ops repo so review/admin/prompt state does not leak across tests.
-    monkeypatch.setattr("app.pipeline.orchestrator.get_llm", lambda settings=None: DisabledLLM())
+    # ops repo so review/admin/prompt state does not leak across tests. Patch BOTH import
+    # sites: the pipeline imports get_llm into app.pipeline.orchestrator, while the AI-edit
+    # routes import it into app.main — otherwise a live SCRIBE_VERTEX_API_KEY in .env makes
+    # the ai-edit routes hit the real LLM and the "requires LLM" assertions break.
+    _disabled = lambda settings=None: DisabledLLM()
+    monkeypatch.setattr("app.pipeline.orchestrator.get_llm", _disabled)
+    monkeypatch.setattr("app.main.get_llm", _disabled)
     repo_mod._repo = None
     yield
     repo_mod._repo = None

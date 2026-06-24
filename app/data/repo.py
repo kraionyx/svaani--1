@@ -60,6 +60,10 @@ class Repository:
         self.ab_metrics: list[dict] = []        # prompt A/B outcome rows (Goal 13)
         self.stage_latencies: list[dict] = []    # per-stage timing rows (Goals 4/12/13)
 
+    def close(self) -> None:
+        """Release backing resources. No-op for the in-memory repo; the persistent
+        backend overrides to close its connection pool at app shutdown."""
+
     # ── Goal 7: doctor reviews (+ auto-enqueue to admin) ───────────────────────
     def add_review(self, review: ConsultationReview) -> ConsultationReview:
         with self._lock:

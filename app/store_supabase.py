@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid as _uuid
 from typing import Any
 
 from app.config import Settings
@@ -32,16 +33,17 @@ logger = logging.getLogger("svaani.store")
 
 _UPSERT = """
 insert into consultations
-  (session_id, patient_ref, template_id, template_version, state,
+  (session_id, practitioner_id, patient_ref, template_id, template_version, state,
    conversation_kind, complexity_score, is_complex, inference_mode, auto_mode, speaker_count,
    audio_confidence, confidence_band, referenced_patient, model_version, prompt_version,
    signed_by_name, signed_at, session_enc, result_enc)
-values (%(session_id)s, %(patient_ref)s, %(template_id)s, %(template_version)s, %(state)s,
+values (%(session_id)s, %(practitioner_id)s, %(patient_ref)s, %(template_id)s, %(template_version)s, %(state)s,
         %(conversation_kind)s, %(complexity_score)s, %(is_complex)s, %(inference_mode)s,
         %(auto_mode)s, %(speaker_count)s, %(audio_confidence)s, %(confidence_band)s,
         %(referenced_patient)s, %(model_version)s, %(prompt_version)s,
         %(signed_by_name)s, %(signed_at)s, %(session_enc)s, %(result_enc)s)
 on conflict (session_id) do update set
+  practitioner_id   = coalesce(excluded.practitioner_id, consultations.practitioner_id),
   patient_ref       = excluded.patient_ref,
   template_id       = excluded.template_id,
   template_version  = excluded.template_version,
@@ -64,6 +66,26 @@ on conflict (session_id) do update set
 """
 
 _SELECT = "select session_enc, result_enc from consultations where session_id = %(session_id)s"
+
+# PHI-free metadata for the "my consultations" list — no decryption, scoped to one user.
+_LIST_BY_PRACTITIONER = """
+select session_id, state, template_id, signed_by_name, created_at, updated_at
+from consultations
+where practitioner_id = %(pid)s
+order by updated_at desc
+limit %(limit)s
+"""
+
+
+def _coerce_uuid(val: Any) -> _uuid.UUID | None:
+    """Adapt an id to a real UUID for the ``uuid`` columns/params (psycopg binds it
+    natively). Dev/header ids like 'doc' aren't UUIDs → None (stored/queried as NULL)."""
+    if not val:
+        return None
+    try:
+        return _uuid.UUID(str(val))
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 class SupabaseSessionStore(SessionStore):
@@ -95,6 +117,7 @@ class SupabaseSessionStore(SessionStore):
         prof = session.conversation_profile
         return {
             "session_id": session.session_id,
+            "practitioner_id": _coerce_uuid(session.practitioner_id),
             "patient_ref": session.patient_id,
             "template_id": session.template_id,
             "template_version": session.template_version,
@@ -162,3 +185,32 @@ class SupabaseSessionStore(SessionStore):
 
     def persist(self, session: ConsultationSession) -> None:
         self._save(session)
+
+    def list_for_practitioner(self, practitioner_id: str, limit: int = 100) -> list[dict]:
+        """Query Postgres for one user's sessions (the cache only holds hydrated rows, so
+        the in-memory filter the base class uses would miss most of them)."""
+        pid = _coerce_uuid(practitioner_id)
+        if pid is None:
+            return []
+        with self._pool.connection() as conn:
+            rows = conn.execute(_LIST_BY_PRACTITIONER, {"pid": pid, "limit": limit}).fetchall()
+        out: list[dict] = []
+        for session_id, state, template_id, signed_by_name, created_at, updated_at in rows:
+            out.append({
+                "session_id": session_id,
+                "state": state,
+                "template_id": template_id,
+                "practitioner_id": str(pid),
+                "signed_by_name": signed_by_name,
+                "has_note": None,  # unknown without decrypting the payload
+                "created_at": created_at.isoformat() if created_at else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
+            })
+        return out
+
+    def close(self) -> None:
+        """Close the connection pool (called at app shutdown)."""
+        try:
+            self._pool.close()
+        except Exception:  # noqa: BLE001 — shutdown best-effort
+            logger.debug("supabase store pool close error", exc_info=True)

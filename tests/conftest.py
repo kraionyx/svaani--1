@@ -1,7 +1,38 @@
 """Shared fixtures: the brief's ENT example as a transcript + grounded extraction."""
 from __future__ import annotations
 
-import pytest
+import os
+
+# ── Hermetic test config ──────────────────────────────────────────────────────
+# The developer's local .env enables production wiring (SCRIBE_AUTH_MODE=jwt,
+# SCRIBE_STORE_BACKEND=supabase). Tests must stay offline and use the dev header
+# scaffold, so force a safe config here BEFORE app.* is imported. Process env vars
+# take precedence over the .env file in pydantic-settings, so this overrides it.
+os.environ["SCRIBE_AUTH_MODE"] = "dev"
+os.environ["SCRIBE_STORE_BACKEND"] = "memory"
+# Blank the JWT knobs so unit tests that construct Settings(auth_mode="jwt", ...) directly
+# aren't tripped by the developer's .env (e.g. SCRIBE_JWT_AUDIENCE=authenticated would force
+# every hand-rolled test token to carry an 'aud' claim). Explicit Settings(...) kwargs and
+# os.environ both outrank the .env file in pydantic-settings.
+for _k in ("SCRIBE_JWT_AUDIENCE", "SCRIBE_JWT_SECRET", "SCRIBE_JWT_JWKS_URL", "SCRIBE_JWT_ISSUER"):
+    os.environ[_k] = ""
+
+from app.config import get_settings  # noqa: E402
+
+get_settings.cache_clear()  # drop any settings cached from .env during collection
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_session_store():
+    """Give each test a fresh in-memory session store (the get_store() singleton is
+    module-global, so without this state leaks between tests)."""
+    import app.store as _store_mod
+
+    _store_mod._store = None
+    yield
+    _store_mod._store = None
 
 from app.schemas.clinical import (
     ChiefComplaint,

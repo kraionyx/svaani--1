@@ -1,0 +1,36 @@
+# Keep the build context small and free of secrets / local cruft.
+.git
+.gitignore
+.env
+.env.*
+*.key
+
+# Python local
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / frontend (rebuilt inside the image)
+web-app/node_modules/
+web-app/dist/
+node_modules/
+*.tsbuildinfo
+
+# Tests & docs not needed at runtime
+tests/
+*.md
+plans/
+
+# Runtime artifacts (may contain PHI)
+audit.log.jsonl
+*.log
+*.db
+svaani.db
+sarvam_*/
+*.pdf
+Screenshot*.png

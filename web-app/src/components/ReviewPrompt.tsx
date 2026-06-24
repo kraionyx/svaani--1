@@ -4,9 +4,9 @@ import { toast } from '../toast';
 
 const CATEGORIES: [string, string][] = [
   ['wrong_patient_identified', 'Wrong patient identified'],
-  ['wrong_speaker_assigned', 'Wrong speaker assigned'],
-  ['soap_section_error', 'SOAP section error'],
-  ['medication_error', 'Medication error'],
+  ['wrong_speaker_assignment', 'Wrong speaker assigned'],
+  ['incorrect_soap_summary', 'SOAP section error'],
+  ['medication_extraction_error', 'Medication error'],
   ['timeline_error', 'Timeline error'],
   ['prompt_misunderstanding', 'Misunderstood instruction'],
   ['missing_diagnosis', 'Missing diagnosis'],

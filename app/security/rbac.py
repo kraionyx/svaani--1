@@ -44,8 +44,9 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
 
 
 class Principal(BaseModel):
-    id: str
+    id: str               # stable user id; in jwt mode this is the auth.users UUID
     role: Role
+    email: str | None = None   # human identity (jwt mode); used for audit/display only
 
 
 class AccessDenied(PermissionError):

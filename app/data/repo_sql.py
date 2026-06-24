@@ -88,6 +88,13 @@ class _SqliteStore:
             self._db.execute("DELETE FROM op_records WHERE kind=? AND rid=?", (kind, rid))
             self._db.commit()
 
+    def close(self) -> None:
+        with self._lock:
+            try:
+                self._db.close()
+            except Exception:  # noqa: BLE001 — shutdown best-effort
+                pass
+
 
 # ── Postgres / Supabase driver (lazy psycopg; not exercised without a live DB) ───
 class _PostgresStore:
@@ -118,6 +125,12 @@ class _PostgresStore:
     def delete(self, kind: str, rid: str) -> None:
         with self._pool.connection() as conn:
             conn.execute("DELETE FROM op_records WHERE kind=%s AND rid=%s", (kind, rid))
+
+    def close(self) -> None:
+        try:
+            self._pool.close()
+        except Exception:  # noqa: BLE001 — shutdown best-effort
+            pass
 
 
 def make_sqlite_store(settings: Settings) -> _SqliteStore:
@@ -288,5 +301,10 @@ def build_persistent_repository(store: _Store, settings: Settings):
             out = super().set_flag(key, enabled, value)
             self._store.upsert("flag", key, json.dumps({"enabled": out["enabled"], "value": out["value"]}))
             return out
+
+        def close(self) -> None:
+            close = getattr(self._store, "close", None)
+            if callable(close):
+                close()
 
     return PersistentRepository()

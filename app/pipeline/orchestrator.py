@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from app.llm.base import MedicalLLM, get_llm
+from app.llm.vertex_gemini import set_agent
 from app.pipeline.clean import clean_transcript
 from app.pipeline.combined import analyze_consultation
 from app.pipeline.complexity import assess_complexity
@@ -55,11 +56,12 @@ def _staged_analyze(
     raw: RawTranscript, llm: MedicalLLM, settings: Settings
 ) -> tuple[CleanTranscript, ClinicalExtraction, list]:
     """Original three-call path: clean, then extract ∥ risk concurrently."""
+    set_agent("clean")
     clean = clean_transcript(raw, llm, settings)
-    # Extraction and the LLM risk pass both depend only on `clean`, so run them
-    # concurrently — collapsing two sequential round-trips into one wall-clock wait.
     with ThreadPoolExecutor(max_workers=2) as pool:
+        set_agent("extract")
         extraction_future = pool.submit(extract_clinical, clean, llm)
+        set_agent("risk")
         risk_markers_future = pool.submit(llm_risk_markers, clean, llm)
         return clean, extraction_future.result(), risk_markers_future.result()
 
@@ -67,14 +69,10 @@ def _staged_analyze(
 def _analyze(
     raw: RawTranscript, llm: MedicalLLM, settings: Settings
 ) -> tuple[CleanTranscript, ClinicalExtraction, list]:
-    """Produce (clean, extraction, llm_risk_markers), preferring the single-pass call.
-
-    With ``single_pass_llm`` the three LLM-derived artifacts come from ONE round-trip;
-    any failure (or a disabled/absent LLM) falls back to the staged path so the note
-    is never blocked.
-    """
+    """Produce (clean, extraction, llm_risk_markers), preferring the single-pass call."""
     if settings.single_pass_llm and llm.available:
         try:
+            set_agent("combined")
             return analyze_consultation(raw, llm, settings)
         except Exception:  # noqa: BLE001 — best-effort; staged path is the safety net
             logger.warning("single-pass analysis failed; falling back to staged pipeline", exc_info=True)
@@ -130,8 +128,7 @@ def run_pipeline(
     _t0 = time.perf_counter()
     note = generate_note(extraction, template)
     if settings.narrative_notes:
-        # Faithful rephrasing of grounded section content into clinical prose. No-op
-        # without an LLM; failure leaves the deterministic text untouched.
+        set_agent("narrate")
         note = narrate_note(note, llm)
     timings_ms["note"] = int((time.perf_counter() - _t0) * 1000)
 

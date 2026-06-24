@@ -146,6 +146,31 @@ language sql stable security definer set search_path = public as $$
   select role from profiles where id = auth.uid();
 $$;
 
+-- Auto-provision a profile for every new auth user (Google OAuth or email/password
+-- signup). Without this a freshly signed-up user has no profile row, so current_app_role()
+-- / current_hospital_id() return NULL and RLS denies everything. SECURITY DEFINER lets the
+-- trigger (which runs as the auth system) write into public.profiles. Idempotent: re-running
+-- this block replaces the function and re-creates the trigger.
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (id, full_name, role, hospital_id)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'name', new.email),
+    'doctor',                                            -- every signup is a clinician by default
+    (select id from public.hospitals where slug = 'demo-hospital')
+  )
+  on conflict (id) do nothing;                           -- never clobber an existing profile
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
 -- ---------------------------------------------------------------------------
 -- 4. Templates (mirror app/schemas/template.TemplateDefinition; versioned)
 -- ---------------------------------------------------------------------------
@@ -487,9 +512,17 @@ create policy doctmpl_tenant on document_templates for all
   using (hospital_id = current_hospital_id())
   with check (hospital_id = current_hospital_id());
 
-create policy consult_tenant on consultations for all
-  using (hospital_id = current_hospital_id())
-  with check (hospital_id = current_hospital_id());
+-- Consultations: a practitioner may touch ONLY their own consults; admins/auditors get
+-- read access across their hospital for the review console. This is the per-user data
+-- isolation guarantee at the database layer (the backend service-role connection bypasses
+-- RLS and enforces the same rule via practitioner_id — see app/main.py _load_session).
+-- NOTE: if you applied an earlier schema, first run:  drop policy consult_tenant on consultations;
+create policy consult_own on consultations for all
+  using (
+    practitioner_id = auth.uid()
+    or (current_app_role() in ('admin','auditor') and hospital_id = current_hospital_id())
+  )
+  with check (practitioner_id = auth.uid());
 
 create policy segments_tenant on speaker_segments for all
   using (exists (select 1 from consultations c
@@ -564,3 +597,102 @@ on conflict (slug) do nothing;
 --   insert into profiles (id, hospital_id, full_name, role)
 --   values ('<auth-user-uuid>', (select id from hospitals where slug='demo-hospital'),
 --           'Dr. Demo', 'doctor');
+
+-- ============================================================================
+-- 18. Production Observability Tables
+--     Written by the app-side logging service (app/logging_service.py).
+--     These use text user_id (the X-User-Id header value, not a UUID FK) so they
+--     work with the dev-header auth scaffold as well as JWT mode. Service_role
+--     writes; admin queries read. No RLS on these tables — the service_role key
+--     is used server-side only and never exposed to the browser.
+-- ============================================================================
+
+-- One row per doctor/user. Counters are incremented via ON CONFLICT DO UPDATE
+-- so a single UPSERT is atomic and race-safe.
+create table if not exists doctor_analytics (
+  user_id               text primary key,
+  full_name             text,
+  email                 text,
+  organization          text,
+  first_seen            timestamptz not null default now(),
+  last_active           timestamptz not null default now(),
+  total_sessions        int not null default 0,
+  total_requests        int not null default 0,
+  total_ai_calls        int not null default 0,
+  total_reports         int not null default 0,
+  total_session_seconds bigint not null default 0,
+  feature_usage         jsonb not null default '{}'::jsonb
+);
+create index if not exists idx_doctor_last_active on doctor_analytics(last_active desc);
+
+-- One row per HTTP request (non-blocking; written from middleware).
+create table if not exists app_logs (
+  id           bigserial primary key,
+  request_id   text,
+  user_id      text,
+  method       text,
+  endpoint     text,
+  status_code  int,
+  duration_ms  int,
+  success      boolean not null default true,
+  metadata     jsonb not null default '{}'::jsonb,
+  created_at   timestamptz not null default now()
+);
+create index if not exists idx_app_logs_created  on app_logs(created_at desc);
+create index if not exists idx_app_logs_user     on app_logs(user_id, created_at desc);
+create index if not exists idx_app_logs_endpoint on app_logs(endpoint, created_at desc);
+create index if not exists idx_app_logs_status   on app_logs(status_code, created_at desc);
+
+-- Structured error capture (backend + frontend errors unified).
+create table if not exists error_logs (
+  id             bigserial primary key,
+  request_id     text,
+  user_id        text,
+  endpoint       text,
+  error_type     text not null,
+  error_message  text not null,
+  stack_trace    text,
+  severity       text not null default 'error',  -- info | warning | error | critical
+  source         text not null default 'backend', -- backend | frontend
+  browser_info   jsonb not null default '{}'::jsonb,
+  ai_analysis    text,
+  created_at     timestamptz not null default now()
+);
+create index if not exists idx_errors_created  on error_logs(created_at desc);
+create index if not exists idx_errors_severity on error_logs(severity, created_at desc);
+create index if not exists idx_errors_source   on error_logs(source, created_at desc);
+
+-- One row per LLM call (Gemini). Captures tokens, latency, and cost estimate.
+create table if not exists ai_analytics (
+  id                bigserial primary key,
+  session_id        text,
+  user_id           text,
+  model             text not null,
+  agent             text,   -- pipeline stage: combined | clean | extract | risk | narrate | …
+  prompt_tokens     int,
+  completion_tokens int,
+  total_tokens      int,
+  cost_usd          numeric(10,6),
+  latency_ms        int not null,
+  success           boolean not null default true,
+  retry_count       int not null default 0,
+  error_message     text,
+  created_at        timestamptz not null default now()
+);
+create index if not exists idx_ai_created on ai_analytics(created_at desc);
+create index if not exists idx_ai_model   on ai_analytics(model, created_at desc);
+create index if not exists idx_ai_agent   on ai_analytics(agent, created_at desc);
+
+-- Explicit user feedback (distinct from consultation_reviews which are per-session).
+create table if not exists user_feedback (
+  id             bigserial primary key,
+  user_id        text not null,
+  session_id     text,
+  rating         int check (rating between 1 and 5),
+  feedback_text  text,
+  feature        text,
+  metadata       jsonb not null default '{}'::jsonb,
+  created_at     timestamptz not null default now()
+);
+create index if not exists idx_feedback_created on user_feedback(created_at desc);
+create index if not exists idx_feedback_user    on user_feedback(user_id, created_at desc);

@@ -1,5 +1,5 @@
 // Streaming consultation client over the backend WebSocket (/ws/consultation).
-import { WS_BASE, type Extraction, type Grounding, type Risk } from './api';
+import { WS_BASE, getAuthToken, type Extraction, type Grounding, type Risk } from './api';
 
 export interface ConsultEvents {
   onStage?: (stage: string, streaming?: boolean) => void;
@@ -23,7 +23,11 @@ export class ConsultSocket {
 
   connect(templateId: string, ev: ConsultEvents, sessionId?: string, mode: 'realtime' | 'batch' | 'auto' | 'hybrid' = 'realtime'): Promise<string> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`${WS_BASE}/ws/consultation`);
+      // Browsers can't set headers on a WS handshake, so the verified token rides as a query
+      // param (?token=…) — the backend's jwt-mode _ws_principal reads it. Dev mode ignores it.
+      const token = getAuthToken();
+      const url = `${WS_BASE}/ws/consultation${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+      const ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
       this.ws = ws;
       let sid = sessionId || '';

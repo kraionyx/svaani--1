@@ -12,17 +12,23 @@ import json
 import logging
 import uuid
 import warnings
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Response, UploadFile, WebSocket
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.logging_config import request_id_ctx, setup_logging
+from app.security.startup import validate_production
+
+from app.admin_routes import router as admin_router
 from app.audio.ws import consultation_ws
 from app.config import get_settings
 from app.data.repo import get_repo
+from app.logging_service import get_logging_service
 from app.export import exporter
 from app.export.pdf import note_to_pdf
 from app.observability import setup_observability
@@ -54,6 +60,7 @@ from app.schemas.template import TemplateDefinition
 from app.schemas.transcript import RawTranscript, SpeakerRole
 from app.stt.sarvam import MockSarvamSTT, get_stt
 from app.store import get_store
+from app.storage.supabase_storage import upload_consultation_files
 from app.templates.document_renderer import render_for_session
 from app.templates.registry import get_registry
 from pydantic import BaseModel
@@ -62,7 +69,46 @@ from pydantic import BaseModel
 # (we never do). Silence that one third-party deprecation so live server logs stay clean.
 warnings.filterwarnings("ignore", message=r"The `dict` method is deprecated", category=DeprecationWarning)
 
-app = FastAPI(title="Svaani AI Medical Scribe", version="0.1.0")
+logger = logging.getLogger("svaani.audio")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: configure logging + validate config. Shutdown: drain + close pools."""
+    settings = get_settings()
+    setup_logging(settings)
+    # Refuse an unsafe production boot (PHI plaintext, dev auth, default admin pw, …);
+    # in development this only logs warnings.
+    validate_production(settings)
+    logger.info(
+        "Svaani starting: env=%s store=%s auth=%s vertex=%s sarvam=%s metrics=%s debug=%s",
+        settings.environment, settings.store_backend, settings.auth_mode,
+        "live" if settings.use_vertex else "off", "live" if settings.use_sarvam else "mock",
+        settings.enable_metrics, settings.debug,
+    )
+    try:
+        yield
+    finally:
+        # Graceful shutdown: flush queued telemetry, then close every connection pool.
+        logger.info("Svaani shutting down — flushing logging + closing pools")
+        try:
+            get_logging_service().close()
+        except Exception:  # noqa: BLE001
+            logger.debug("logging service close error", exc_info=True)
+        for closer in (lambda: get_store().close(), lambda: get_repo().close()):
+            try:
+                closer()
+            except Exception:  # noqa: BLE001
+                logger.debug("pool close error", exc_info=True)
+
+
+app = FastAPI(
+    title="Svaani AI Medical Scribe",
+    version=get_settings().app_version,
+    debug=get_settings().debug,
+    lifespan=lifespan,
+)
+app.include_router(admin_router)
 
 # The frontend is a standalone static app served on its own port (default :5173),
 # so cross-origin XHR/fetch and the custom auth headers must be allowed. Origins are
@@ -75,9 +121,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logger = logging.getLogger("svaani.audio")
 
-# Observability: request-id propagation, access logs, and Prometheus /metrics.
+# ── Global exception handlers ─────────────────────────────────────────────────
+# Domain errors map to the right status; everything else returns a clean 500 (full
+# traceback is logged with the request-id, and only echoed to the client in debug).
+@app.exception_handler(AccessDenied)
+async def _access_denied_handler(request: Request, exc: AccessDenied):
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(AuthError)
+async def _auth_error_handler(request: Request, exc: AuthError):
+    return JSONResponse(status_code=401, content={"detail": str(exc)})
+
+
+@app.exception_handler(IllegalTransition)
+async def _illegal_transition_handler(request: Request, exc: IllegalTransition):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(Exception)
+async def _unhandled_handler(request: Request, exc: Exception):
+    rid = request_id_ctx.get()
+    logger.exception("unhandled error rid=%s %s %s", rid, request.method, request.url.path)
+    body = {"detail": "internal server error", "request_id": rid}
+    if get_settings().debug:
+        import traceback as _tb
+        body["error"] = f"{type(exc).__name__}: {exc}"
+        body["traceback"] = _tb.format_exc()
+    return JSONResponse(status_code=500, content=body)
+
+
+# Observability: request-id propagation, access logs, security headers, Prometheus /metrics.
 setup_observability(app, get_settings())
 
 # Minimum uploaded-audio size; anything smaller is effectively a silent/empty
@@ -111,20 +186,58 @@ def root() -> RedirectResponse:
     return RedirectResponse("/app/" if _WEBAPP_DIR.exists() else "/ui/")
 
 
-# ── Auth (scaffold) ──────────────────────────────────────────────────────────
+@app.get("/admin1", include_in_schema=False)
+@app.get("/admin1/", include_in_schema=False)
+def admin_ui() -> FileResponse:
+    """Serve the SPA at /admin1 so the React path check renders AdminPage."""
+    index = _WEBAPP_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=503, detail="SPA not built — run: cd web-app && npm run build")
+    return FileResponse(str(index))
+
+
+# ── Auth ───────────────────────────────────────────────────────────────────────
 def get_principal(
+    request: Request,
     authorization: str | None = Header(default=None),
     x_user_id: str = Header(default="dev-doctor"),
     x_role: str = Header(default="doctor"),
 ) -> Principal:
     try:
-        return principal_from(
+        principal = principal_from(
             get_settings(), authorization=authorization, x_user_id=x_user_id, x_role=x_role
         )
     except AuthError as e:
+        # Surface the REASON in the admin console (not just a bare 401 in the access log).
+        # Client-side causes are 'warning'; an unreachable verifier is 'error' (operational).
+        _log_auth_event(
+            request, severity=getattr(e, "severity", "warning"),
+            error_type=f"auth_{getattr(e, 'reason', 'invalid_token')}", message=str(e),
+        )
         raise HTTPException(status_code=401, detail=str(e))
     except ValueError:
+        _log_auth_event(request, severity="warning", error_type="auth_unknown_role",
+                        message=f"unknown role '{x_role}'")
         raise HTTPException(status_code=400, detail=f"unknown role '{x_role}'")
+    # Stash the resolved identity so the observability middleware logs the REAL user (in jwt
+    # mode the browser sends a Bearer token, not X-User-Id, so the header would read 'anonymous').
+    request.state.user_id = principal.id
+    request.state.user_email = principal.email
+    return principal
+
+
+def _log_auth_event(request: Request, *, severity: str, error_type: str, message: str) -> None:
+    """Record an auth failure to the logging service so it appears in the admin console's
+    Errors view with a request-id, endpoint, and reason. Best-effort; never raises."""
+    rid = request_id_ctx.get()
+    logger.warning("auth rejected rid=%s %s %s: %s", rid, request.method, request.url.path, message)
+    try:
+        get_logging_service().log_error(
+            request_id=rid, user_id=None, endpoint=request.url.path,
+            error_type=error_type, error_message=message, severity=severity, source="auth",
+        )
+    except Exception:  # noqa: BLE001 — logging must never break the request
+        logger.debug("failed to record auth event", exc_info=True)
 
 
 def _check(principal: Principal, perm: Permission) -> None:
@@ -132,6 +245,38 @@ def _check(principal: Principal, perm: Permission) -> None:
         require_permission(principal, perm)
     except AccessDenied as e:
         raise HTTPException(status_code=403, detail=str(e))
+
+
+def _load_session(sid: str, principal: Principal):
+    """Fetch a session by id, enforcing per-user ownership in jwt mode.
+
+    Returns ``(store, session)``. In the dev header scaffold there are no real users, so
+    ownership is not enforced. In jwt mode a consultation may be touched only by the
+    practitioner who created it — defense-in-depth on top of unguessable session ids and
+    Postgres RLS — while ADMIN/AUDITOR keep cross-user visibility for the review console.
+    """
+    store = get_store()
+    if not store.exists(sid):
+        raise HTTPException(status_code=404, detail="unknown session")
+    session = store.get(sid)
+    if (get_settings().auth_mode == "jwt"
+            and session.practitioner_id
+            and session.practitioner_id != principal.id
+            and principal.role not in (Role.ADMIN, Role.AUDITOR)):
+        # A user tried to reach a session they don't own — log it for the admin console.
+        logger.warning("ownership denied: user=%s tried session=%s owner=%s",
+                       principal.id, sid, session.practitioner_id)
+        try:
+            get_logging_service().log_error(
+                request_id=request_id_ctx.get(), user_id=principal.id, endpoint=f"/sessions/{sid}",
+                error_type="auth_ownership_denied",
+                error_message=f"user {principal.id} attempted to access session owned by {session.practitioner_id}",
+                severity="warning", source="auth",
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("failed to record ownership denial", exc_info=True)
+        raise HTTPException(status_code=403, detail="not your consultation")
+    return store, session
 
 
 # ── Request bodies ───────────────────────────────────────────────────────────
@@ -181,19 +326,80 @@ def _advance_to_edited(session: ConsultationSession) -> None:
         pass  # already past the editable phase (e.g. approved) — content still saved
 
 
+# ── Public auth config ───────────────────────────────────────────────────────
+@app.get("/auth/config")
+def auth_config() -> dict:
+    """Public bootstrap for the SPA's Supabase client — only browser-safe values (the
+    anon key is designed to be public). The SPA reads this at startup so credentials live
+    in ONE place (the backend .env), not duplicated into a Vite build. ``auth_required``
+    tells the SPA whether to gate the app behind login (true only in jwt mode with creds)."""
+    s = get_settings()
+    required = s.auth_mode == "jwt" and bool(s.supabase_url and s.supabase_anon_key)
+    # Help developers spot a half-wired setup (e.g. jwt mode but no Supabase URL/key) right
+    # in the logs at SPA boot, instead of debugging a silent "login never appears".
+    if s.auth_mode == "jwt" and not required:
+        logger.warning("auth: SCRIBE_AUTH_MODE=jwt but Supabase URL/anon key missing — "
+                       "SPA will NOT gate behind login. Set SCRIBE_SUPABASE_URL + SCRIBE_SUPABASE_ANON_KEY.")
+    else:
+        logger.debug("auth: /auth/config served (auth_required=%s, url_set=%s)",
+                     required, bool(s.supabase_url))
+    return {
+        "supabase_url": s.supabase_url,
+        "supabase_anon_key": s.supabase_anon_key,
+        "auth_mode": s.auth_mode,
+        # Gate the UI only when real auth is wired (jwt mode + a configured Supabase project).
+        "auth_required": required,
+    }
+
+
 # ── Health & templates ───────────────────────────────────────────────────────
 @app.get("/health")
 def health() -> dict:
+    """Liveness probe — is the process up? No secrets/config leaked (was: key length,
+    project id, backend). Provider status reflects whether live creds are configured."""
     s = get_settings()
     return {
         "status": "ok",
         "app": s.app_name,
+        "version": s.app_version,
         "sarvam": "live" if s.use_sarvam else "mock",
         "vertex": "live" if s.use_vertex else "disabled",
-        "debug_vertex_key_len": len(s.vertex_api_key),
-        "debug_vertex_project": s.vertex_project,
-        "debug_store": s.store_backend,
     }
+
+
+@app.get("/health/ready", include_in_schema=False)
+def readiness() -> Response:
+    """Readiness probe — can we serve traffic? Probes the durable store + logging DB.
+    Returns 503 (not ready) if a configured backend can't be reached."""
+    s = get_settings()
+    checks: dict[str, str] = {}
+    ready = True
+
+    # Session store: only the durable backends have a pool to probe.
+    if s.store_backend in {"sqlite", "supabase"}:
+        try:
+            store = get_store()
+            ok = bool(store.exists("__readiness_probe__")) or True  # any answer == reachable
+            checks["store"] = "ok" if ok else "fail"
+        except Exception:  # noqa: BLE001
+            checks["store"] = "fail"; ready = False
+    else:
+        checks["store"] = "memory"
+
+    # Supabase logging service (if configured).
+    svc = get_logging_service()
+    if getattr(svc, "available", False):
+        if svc.ping():
+            checks["logging_db"] = "ok"
+        else:
+            checks["logging_db"] = "fail"; ready = False
+    else:
+        checks["logging_db"] = "disabled"
+
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"status": "ready" if ready else "not_ready", "checks": checks},
+    )
 
 
 @app.get("/templates")
@@ -259,12 +465,26 @@ def create_session(req: CreateSessionRequest, principal: Principal = Depends(get
     auto_mode, manual_mode = split_mode_choice(req.mode, legacy_auto=req.auto)
     session = ConsultationSession(
         session_id=sid, template_id=req.template_id,
-        patient_id=req.patient_id, practitioner_id=req.practitioner_id or principal.id,
+        # Owner is ALWAYS the authenticated caller — a client can't assign a consult to
+        # another user (the request's practitioner_id field is ignored for that reason).
+        patient_id=req.patient_id, practitioner_id=principal.id,
         auto_mode=auto_mode, manual_mode=manual_mode,
     )
     get_store().create(session)
     get_audit_log().record(AuditEvent(actor_id=principal.id, action="create_session", resource="session", session_id=sid))
+    get_logging_service().update_doctor(
+        user_id=principal.id, increment_sessions=1, feature="session_create",
+        email=principal.email,  # jwt mode: record the real identity for the admin Doctors view
+    )
     return {"session_id": sid, "state": session.state.value, "template_id": req.template_id}
+
+
+@app.get("/sessions")
+def list_my_sessions(principal: Principal = Depends(get_principal)) -> list[dict]:
+    """List the authenticated user's own consultations (most-recent first), as PHI-free
+    metadata for a 'My consultations' view. Each user sees only their own sessions."""
+    _check(principal, Permission.VIEW_TRANSCRIPT)
+    return get_store().list_for_practitioner(principal.id)
 
 
 def _process(session: ConsultationSession, raw: RawTranscript, principal: Principal) -> dict:
@@ -310,6 +530,13 @@ def _process(session: ConsultationSession, raw: RawTranscript, principal: Princi
     if session.state is ReviewState.PROCESSING:
         session.transition(ReviewState.DRAFT)
     get_store().persist(session)
+    # Upload transcript + note as .txt files to Supabase Storage (background, best-effort).
+    upload_consultation_files(
+        session_id=session.session_id,
+        transcript_text=result.clean.full_text or raw.full_text,
+        note_markdown=result.note.to_markdown(),
+        settings=settings,
+    )
     get_audit_log().record(AuditEvent(
         actor_id=principal.id, action="process_pipeline", resource="session",
         session_id=session.session_id, phi_accessed=True,
@@ -327,10 +554,7 @@ def _process(session: ConsultationSession, raw: RawTranscript, principal: Princi
 @app.post("/sessions/{sid}/transcript")
 def submit_transcript(sid: str, raw: RawTranscript, principal: Principal = Depends(get_principal)) -> dict:
     _check(principal, Permission.VIEW_TRANSCRIPT)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     raw.session_id = sid
     return _process(session, raw, principal)
 
@@ -339,10 +563,7 @@ def submit_transcript(sid: str, raw: RawTranscript, principal: Principal = Depen
 def simulate(sid: str, principal: Principal = Depends(get_principal)) -> dict:
     """Run the pipeline on a canned consultation — smoke-test aid (always mock STT)."""
     _check(principal, Permission.VIEW_TRANSCRIPT)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     raw = MockSarvamSTT().transcribe(b"", session_id=sid)
     return _process(session, raw, principal)
 
@@ -351,10 +572,7 @@ def simulate(sid: str, principal: Principal = Depends(get_principal)) -> dict:
 async def upload_audio(sid: str, file: UploadFile = File(...), principal: Principal = Depends(get_principal)) -> dict:
     """Transcribe an uploaded recording via Sarvam V3 (batch-diarized → fallback) and run the pipeline."""
     _check(principal, Permission.VIEW_TRANSCRIPT)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     audio = await file.read()
     logger.info("audio upload: session=%s bytes=%d content_type=%s", sid, len(audio), file.content_type)
     if len(audio) < _MIN_AUDIO_BYTES:
@@ -383,10 +601,7 @@ async def upload_audio(sid: str, file: UploadFile = File(...), principal: Princi
 @app.get("/sessions/{sid}")
 def get_session(sid: str, principal: Principal = Depends(get_principal)) -> dict:
     _check(principal, Permission.VIEW_TRANSCRIPT)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    s = store.get(sid)
+    _store, s = _load_session(sid, principal)
     return {
         "session_id": s.session_id, "state": s.state.value,
         "template": {"id": s.template_id, "version": s.template_version},
@@ -400,10 +615,7 @@ def get_session(sid: str, principal: Principal = Depends(get_principal)) -> dict
 @app.get("/sessions/{sid}/outputs/{kind}")
 def get_output(sid: str, kind: str, principal: Principal = Depends(get_principal)) -> dict:
     _check(principal, Permission.VIEW_TRANSCRIPT)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    s = store.get(sid)
+    _store, s = _load_session(sid, principal)
     mapping = {
         "raw": s.raw_transcript, "clean": s.clean_transcript,
         "extraction": s.extraction, "note": s.note, "risk": s.risk,
@@ -428,10 +640,7 @@ def get_coding_hints(sid: str, principal: Principal = Depends(get_principal)) ->
     is grounded to the diagnosis it codes — the scribe never invents a diagnosis.
     """
     _check(principal, Permission.VIEW_TRANSCRIPT)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     if session.extraction is None:
         raise HTTPException(status_code=409, detail="no extraction yet")
     hints = suggest_icd10(session.extraction, get_llm(get_settings()))
@@ -446,10 +655,7 @@ def edit_note(sid: str, req: NoteEditRequest, principal: Principal = Depends(get
     structured extraction and its provenance are left intact. Requires EDIT_NOTE.
     """
     _check(principal, Permission.EDIT_NOTE)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     if session.note is None:
         raise HTTPException(status_code=409, detail="no note to edit yet")
 
@@ -482,10 +688,7 @@ def edit_extraction(sid: str, req: ExtractionEditRequest, principal: Principal =
     Requires EDIT_NOTE.
     """
     _check(principal, Permission.EDIT_NOTE)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     if session.extraction is None:
         raise HTTPException(status_code=409, detail="no extraction to edit yet")
 
@@ -521,10 +724,7 @@ def edit_risk(sid: str, req: RiskEditRequest, principal: Principal = Depends(get
     note or extraction. Requires EDIT_NOTE.
     """
     _check(principal, Permission.EDIT_NOTE)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     if session.risk is None:
         raise HTTPException(status_code=409, detail="no risk assessment to edit yet")
 
@@ -542,10 +742,7 @@ def edit_risk(sid: str, req: RiskEditRequest, principal: Principal = Depends(get
 
 @app.post("/sessions/{sid}/state")
 def transition_state(sid: str, req: StateRequest, principal: Principal = Depends(get_principal)) -> dict:
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     perm = Permission.FINALIZE_NOTE if req.state is ReviewState.FINALIZED else (
         Permission.APPROVE_NOTE if req.state is ReviewState.APPROVED else Permission.EDIT_NOTE
     )
@@ -560,6 +757,9 @@ def transition_state(sid: str, req: StateRequest, principal: Principal = Depends
         session.signed_by_name = req.signed_by_name.strip()
         session.signature_image = req.signature_image
         session.signed_at = datetime.now(timezone.utc)
+        get_logging_service().update_doctor(
+            user_id=principal.id, increment_reports=1, feature="report_finalized"
+        )
     store.persist(session)
     get_audit_log().record(AuditEvent(
         actor_id=principal.id, action="transition", resource="session",
@@ -571,10 +771,7 @@ def transition_state(sid: str, req: StateRequest, principal: Principal = Depends
 @app.get("/sessions/{sid}/export/{fmt}")
 def export_session(sid: str, fmt: str, principal: Principal = Depends(get_principal)):
     _check(principal, Permission.EXPORT)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     if not session.is_exportable:
         raise HTTPException(status_code=409, detail="session is not FINALIZED; cannot export")
     get_audit_log().record(AuditEvent(
@@ -617,10 +814,7 @@ def _require_role(principal: Principal, *roles: Role) -> None:
 def get_profile(sid: str, principal: Principal = Depends(get_principal)) -> dict:
     """Relationships, referenced patient, complexity, and confidence for the consult."""
     _check(principal, Permission.VIEW_TRANSCRIPT)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     if session.conversation_profile is None:
         raise HTTPException(status_code=409, detail="no conversation profile yet")
     p = session.conversation_profile
@@ -653,10 +847,7 @@ def correct_speakers(sid: str, req: SpeakerCorrectionRequest, principal: Princip
     correction is reflected. Requires EDIT_NOTE.
     """
     _check(principal, Permission.EDIT_NOTE)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     if session.conversation_profile is None:
         raise HTTPException(status_code=409, detail="no conversation profile to correct")
 
@@ -712,10 +903,7 @@ def submit_review(sid: str, req: ReviewRequest, principal: Principal = Depends(g
     """Capture the doctor's 👍/👎 verdict (+ structured error categories). A
     needs_improvement review is auto-enqueued to the admin console (Goal 8)."""
     _check(principal, Permission.VIEW_TRANSCRIPT)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     profile = session.conversation_profile
     try:
         inf_mode = InferenceMode(session.inference_mode) if session.inference_mode else None
@@ -1018,10 +1206,7 @@ def ai_edit_preview(sid: str, req: AiEditRequest, principal: Principal = Depends
     _check(principal, Permission.EDIT_NOTE)
     if not get_settings().ai_edit_enabled:
         raise HTTPException(status_code=403, detail="AI editor is disabled")
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     if session.note is None:
         raise HTTPException(status_code=409, detail="no note to edit yet")
     try:
@@ -1047,10 +1232,7 @@ class AiEditApplyRequest(BaseModel):
 def ai_edit_apply(sid: str, req: AiEditApplyRequest, principal: Principal = Depends(get_principal)) -> dict:
     """Apply approved AI-edit changes to the note and record them for undo/redo (Goal 11)."""
     _check(principal, Permission.EDIT_NOTE)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     if session.note is None:
         raise HTTPException(status_code=409, detail="no note to edit yet")
     known = {s.section_id for s in session.note.sections}
@@ -1094,10 +1276,7 @@ def _apply_section_text(note, section_id: str, text: str) -> bool:
 
 def _undo_redo(sid: str, principal: Principal, *, redo: bool) -> dict:
     _check(principal, Permission.EDIT_NOTE)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     if session.note is None:
         raise HTTPException(status_code=409, detail="no note to edit yet")
     repo = get_repo()
@@ -1180,14 +1359,11 @@ class AiEditProposalRequest(BaseModel):
     instruction: str
 
 
-def _require_session_llm(sid: str):
-    """Shared guard for the structured AI-edit routes."""
+def _require_session_llm(sid: str, principal: Principal):
+    """Shared guard for the structured AI-edit routes (feature flag + ownership)."""
     if not get_settings().ai_edit_enabled:
         raise HTTPException(status_code=403, detail="AI editor is disabled")
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    return store, store.get(sid)
+    return _load_session(sid, principal)
 
 
 @app.post("/sessions/{sid}/ai-edit/extraction")
@@ -1196,7 +1372,7 @@ def ai_edit_extraction_preview(
 ) -> dict:
     """Preview an AI edit of the structured extraction from a natural-language instruction."""
     _check(principal, Permission.EDIT_NOTE)
-    _store, session = _require_session_llm(sid)
+    _store, session = _require_session_llm(sid, principal)
     if session.extraction is None:
         raise HTTPException(status_code=409, detail="no extraction to edit yet")
     try:
@@ -1221,7 +1397,7 @@ def ai_edit_extraction_apply(
 ) -> dict:
     """Apply an approved AI extraction edit, re-grounding + re-rendering the note (no LLM call)."""
     _check(principal, Permission.EDIT_NOTE)
-    store, session = _require_session_llm(sid)
+    store, session = _require_session_llm(sid, principal)
     if session.extraction is None:
         raise HTTPException(status_code=409, detail="no extraction to edit yet")
     extraction = req.proposed
@@ -1255,7 +1431,7 @@ def ai_edit_risk_preview(
 ) -> dict:
     """Preview an AI edit of the risk markers from a natural-language instruction."""
     _check(principal, Permission.EDIT_NOTE)
-    _store, session = _require_session_llm(sid)
+    _store, session = _require_session_llm(sid, principal)
     if session.risk is None:
         raise HTTPException(status_code=409, detail="no risk assessment to edit yet")
     try:
@@ -1284,7 +1460,7 @@ def ai_edit_risk_apply(
 ) -> dict:
     """Apply approved AI risk-marker edits and re-score (never touches note/extraction)."""
     _check(principal, Permission.EDIT_NOTE)
-    store, session = _require_session_llm(sid)
+    store, session = _require_session_llm(sid, principal)
     if session.risk is None:
         raise HTTPException(status_code=409, detail="no risk assessment to edit yet")
     session.risk = RiskAssessment(
@@ -1337,10 +1513,7 @@ def preview_document(sid: str, req: PreviewRequest, principal: Principal = Depen
     the AI authors nothing. The doctor previews, edits, and approves. Requires EDIT_NOTE.
     """
     _check(principal, Permission.EDIT_NOTE)
-    store = get_store()
-    if not store.exists(sid):
-        raise HTTPException(status_code=404, detail="unknown session")
-    session = store.get(sid)
+    store, session = _load_session(sid, principal)
     if session.extraction is None:
         raise HTTPException(status_code=409, detail="no clinical content to render yet")
     repo = get_repo()
@@ -1437,6 +1610,39 @@ def set_feature_flag(req: FlagRequest, principal: Principal = Depends(get_princi
 
 
 # ── WebSocket ────────────────────────────────────────────────────────────────
+def _ws_principal(websocket: WebSocket, settings) -> Principal:
+    """Authenticate a WebSocket the same way as REST, but read credentials from the
+    query string (browsers can't set headers on a WS handshake).
+
+    dev mode:  ?user_id=&role=   (header scaffold, unauthenticated — local only)
+    jwt mode:  ?token=<bearer>   (verified; rejected on failure)
+    """
+    qp = websocket.query_params
+    if settings.auth_mode == "jwt":
+        token = qp.get("token", "")
+        return principal_from(settings, authorization=f"Bearer {token}",
+                              x_user_id="", x_role="doctor")
+    return principal_from(settings, authorization=None,
+                          x_user_id=qp.get("user_id", "dev-doctor"),
+                          x_role=qp.get("role", "doctor"))
+
+
 @app.websocket("/ws/consultation")
 async def ws_consultation(websocket: WebSocket) -> None:
-    await consultation_ws(websocket, get_store(), get_settings())
+    settings = get_settings()
+    try:
+        principal = _ws_principal(websocket, settings)
+        require_permission(principal, Permission.VIEW_TRANSCRIPT)
+    except (AuthError, AccessDenied, ValueError) as exc:
+        await websocket.close(code=4401)  # 4401: application-level "unauthorized"
+        logger.warning("ws auth rejected: %s", exc)
+        try:  # surface in the admin console like the REST auth failures
+            get_logging_service().log_error(
+                endpoint="/ws/consultation", error_type="auth_ws_rejected",
+                error_message=str(exc), severity=getattr(exc, "severity", "warning"), source="auth",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    logger.info("ws connected: user=%s role=%s", principal.id, principal.role.value)
+    await consultation_ws(websocket, get_store(), settings, principal)

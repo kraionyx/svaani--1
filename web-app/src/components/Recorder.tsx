@@ -29,20 +29,58 @@ export function Recorder(p: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!p.analyser || !p.recording) return;
     const cv = canvasRef.current!; const ctx = cv.getContext('2d')!;
-    const data = new Uint8Array(p.analyser.frequencyBinCount);
     let raf = 0;
+    const data = p.analyser ? new Uint8Array(p.analyser.frequencyBinCount) : null;
+
     const draw = () => {
       raf = requestAnimationFrame(draw);
       const w = cv.width = cv.clientWidth || 280; const h = cv.height = 46;
       ctx.clearRect(0, 0, w, h);
-      p.analyser!.getByteFrequencyData(data);
+
+      let intensity = 0.1; // Default breathing intensity
+      if (p.analyser && p.recording && data) {
+        p.analyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          sum += data[i];
+        }
+        intensity = (sum / data.length) / 128.0;
+      }
+
       const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#0fb9a6';
-      ctx.fillStyle = accent;
-      const bars = 40, step = Math.max(1, Math.floor(data.length / bars)), bw = w / bars;
-      for (let i = 0; i < bars; i++) { const v = data[i * step] / 255; const bh = Math.max(2, v * h * 0.95); ctx.fillRect(i * bw + 1, (h - bh) / 2, bw - 2, bh); }
+      
+      const numWaves = 3;
+      const phases = [0, Math.PI / 3, Math.PI * 2 / 3];
+      const opacities = p.recording ? [0.8, 0.4, 0.2] : [0.35, 0.2, 0.1];
+      const speeds = p.recording ? [0.18, 0.12, 0.08] : [0.03, 0.02, 0.015];
+      const time = performance.now() * 0.01;
+
+      for (let wIndex = 0; wIndex < numWaves; wIndex++) {
+        ctx.beginPath();
+        ctx.strokeStyle = p.recording ? '#e74c3c' : accent;
+        ctx.lineWidth = wIndex === 0 ? 2 : 1;
+        ctx.globalAlpha = opacities[wIndex];
+
+        const phase = phases[wIndex] + time * speeds[wIndex];
+        const amplitude = (p.recording ? Math.max(5, intensity * 24) : 4) * (wIndex === 0 ? 1.0 : 0.6);
+
+        for (let x = 0; x < w; x++) {
+          const normalX = x / w;
+          const envelope = Math.sin(normalX * Math.PI);
+          const y = h / 2 + Math.sin(normalX * Math.PI * (p.recording ? 3.5 : 2.0) + phase) * amplitude * envelope;
+          
+          if (x === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1.0;
     };
+
     draw();
     return () => cancelAnimationFrame(raf);
   }, [p.analyser, p.recording]);

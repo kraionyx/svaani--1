@@ -17,6 +17,10 @@ class Settings(BaseSettings):
 
     # ── App ──────────────────────────────────────────────────────────────────
     app_name: str = "Svaani AI Medical Scribe"
+    app_version: str = "0.1.0"
+    # 'development' (default) | 'production'. In production the startup guard
+    # (app.security.startup.validate_production) refuses to boot on unsafe config
+    # (PHI plaintext no-op, dev header-auth, default admin password, localhost CORS).
     environment: str = "development"
     # Comma-separated browser origins allowed to call the API. The frontend is now a
     # standalone static app served on its own port (default :5173), so the API must
@@ -26,10 +30,11 @@ class Settings(BaseSettings):
         "http://localhost:8000,http://127.0.0.1:8000"
     )
 
-    # ── Sarvam V3 STT ────────────────────────────────────────────────────────
+    # ── Sarvam V3 STT & AI Agent ──────────────────────────────────────────────
     # Real-time/stream → immediate transcript (no speaker labels).
     # Batch API (with_diarization) → accurate, speaker-labeled transcript.
     sarvam_api_key: str = ""
+    agent_api_key: str = ""
     sarvam_stt_model: str = "saaras:v3"        # saaras:v3 = speech→English
     # Capture mode. 'codemix' keeps the spoken words (Indic words romanized, English kept)
     # so Telugu/code-mixed nouns survive instead of being force-translated and mangled
@@ -110,30 +115,72 @@ class Settings(BaseSettings):
     # instance caps total connections). Server-side only — never expose to the browser.
     # Schema lives in supabase/schema.sql.
     supabase_db_url: str = ""                  # postgresql://...:6543/postgres (pooler)
-    supabase_url: str = ""                     # https://<ref>.supabase.co (for future PostgREST use)
+    supabase_url: str = ""                     # https://<ref>.supabase.co (Auth + PostgREST origin)
+    supabase_anon_key: str = ""                # anon/public key — SAFE for the browser (served to the SPA)
     supabase_service_key: str = ""             # service_role JWT (server-side only; bypasses RLS)
     supabase_pool_max: int = 5                 # max pooled connections held by the app
+    # Supabase Storage: bucket for transcript + note .txt files. Create as a *private*
+    # bucket in the Supabase dashboard. Uploads are skipped when URL/key are not set.
+    supabase_storage_bucket: str = "consultation-files"
 
     # ── Auth ─────────────────────────────────────────────────────────────────
     # 'dev' keeps the header scaffold (X-User-Id / X-Role); 'jwt' requires a verified
-    # bearer token. HS256 dev secret, or RS256 via a Keycloak/OIDC JWKS URL.
+    # bearer token. For Supabase Auth (Google + email/password) set auth_mode=jwt and
+    # SCRIBE_JWT_SECRET to the project's JWT secret (Dashboard → Project Settings → API
+    # → JWT Settings). Tokens are HS256-signed with that secret and carry aud="authenticated".
+    # Projects migrated to asymmetric signing keys instead expose a JWKS endpoint — set
+    # SCRIBE_JWT_JWKS_URL (or leave blank to auto-derive it from SCRIBE_SUPABASE_URL).
     auth_mode: str = "dev"
-    jwt_secret: str = ""                       # HS256 shared secret (dev/test)
-    jwt_jwks_url: str = ""                      # RS256 JWKS endpoint (e.g. Keycloak)
+    jwt_secret: str = ""                       # HS256 shared secret (Supabase JWT secret / dev)
+    jwt_jwks_url: str = ""                      # RS256/ES256 JWKS endpoint (asymmetric keys)
+    # Supabase access tokens carry aud="authenticated"; set SCRIBE_JWT_AUDIENCE=authenticated
+    # in production to verify it. Left empty by default so tokens without an aud claim (and
+    # the existing unit tests) still verify.
     jwt_audience: str = ""
     jwt_issuer: str = ""
 
-    # ── Observability ────────────────────────────────────────────────────────
+    # ── Observability / logging ──────────────────────────────────────────────
     enable_metrics: bool = True                # expose Prometheus /metrics
+    # Root log level: DEBUG | INFO | WARNING | ERROR. Default INFO so app logger.info()
+    # lines actually appear (Python's implicit default is WARNING, which hid them).
+    log_level: str = "INFO"
+    # Emit logs as one JSON object per line (for log aggregators) instead of text.
+    log_json: bool = False
+    # Dev convenience: enables FastAPI debug and includes tracebacks in 500 responses.
+    # MUST stay False in production (the startup guard does not force this, but a
+    # production boot with debug=True is logged as a warning).
+    debug: bool = False
 
     # ── Security ─────────────────────────────────────────────────────────────
     phi_encryption_key_b64: str = ""           # base64 32-byte key for AES-GCM; empty => dev no-op
     enable_phi_redaction: bool = True
     audit_log_path: str = "audit.log.jsonl"
+    # Internal admin dashboard (/admin1) password. Override in every real deployment via
+    # SCRIBE_ADMIN_PASSWORD; the dev fallback is world-readable in the public repo.
+    admin_password: str = "kraionyx1"
+    # Security response headers (X-Frame-Options, nosniff, Referrer-Policy, and HSTS when
+    # not in development). Disable only if a reverse proxy already sets them.
+    security_headers: bool = True
+    # Per-IP rate limit on the admin auth endpoint: max attempts / window seconds.
+    admin_auth_rate_limit: int = 10
+    admin_auth_rate_window_s: int = 60
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() in {"production", "prod"}
 
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+
+    @property
+    def supabase_jwks_url(self) -> str:
+        """JWKS endpoint for verifying Supabase tokens signed with asymmetric keys.
+        Explicit SCRIBE_JWT_JWKS_URL wins; otherwise derive it from SCRIBE_SUPABASE_URL."""
+        if self.jwt_jwks_url:
+            return self.jwt_jwks_url
+        base = self.supabase_url.rstrip("/")
+        return f"{base}/auth/v1/.well-known/jwks.json" if base else ""
 
     @property
     def use_vertex(self) -> bool:

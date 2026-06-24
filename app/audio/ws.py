@@ -41,6 +41,7 @@ from app.schemas.intelligence import ConversationProfile
 from app.schemas.review import InferenceMode
 from app.schemas.session import ConsultationSession, ReviewState
 from app.schemas.transcript import RawTranscript
+from app.security.rbac import Principal
 from app.stt import sarvam_stream
 from app.stt.doctor_detect import assign_clinical_roles
 from app.stt.sarvam import get_stt
@@ -53,7 +54,9 @@ logger = logging.getLogger("svaani.audio")
 _MIN_AUDIO_BYTES = 1024
 
 
-async def consultation_ws(websocket: WebSocket, store: SessionStore, settings: Settings) -> None:
+async def consultation_ws(
+    websocket: WebSocket, store: SessionStore, settings: Settings, principal: Principal
+) -> None:
     await websocket.accept()
     session: ConsultationSession | None = None
     buffer = bytearray()                       # raw PCM16 for the batch-diarized pass
@@ -147,6 +150,7 @@ async def consultation_ws(websocket: WebSocket, store: SessionStore, settings: S
                 )
                 session = ConsultationSession(
                     session_id=sid, template_id=template_id, state=ReviewState.LISTENING,
+                    practitioner_id=principal.id,  # owner = authenticated caller (per-user isolation)
                     auto_mode=auto_mode, manual_mode=manual_mode,
                 )
                 store.create(session)

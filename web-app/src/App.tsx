@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import * as API from './api';
+import { useAuth } from './auth';
 import { useStore } from './store';
 import { onToast, toast } from './toast';
 import { ConsultSocket } from './ws';
@@ -20,16 +21,31 @@ import { PrescriptionPreview } from './components/PrescriptionPreview';
 import { AdminDashboard } from './components/AdminDashboard';
 import { ThemeStudio } from './components/ThemeStudio';
 import { applyCustom, clearCustomInline, loadCustom } from './theme';
+import { ThreeScene } from './components/ThreeScene';
 
 const THEMES = ['mint', 'white', 'dark', 'custom'];
 
+function formatSessionDate(isoString?: string | null) {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return '';
+  const datePart = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const timePart = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  return `${datePart}, ${timePart}`;
+}
+
 export function App() {
   const s = useStore();
+  const { session, signOut } = useAuth();
   const [toastMsg, setToastMsg] = useState<{ m: string; e: boolean } | null>(null);
   const sockRef = useRef<ConsultSocket | null>(null);
   const micRef = useRef<MicHandle | null>(null);
   const [signOpen, setSignOpen] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
+  const [history, setHistory] = useState<API.SessionSummary[]>([]);
+  const [filterQuery, setFilterQuery] = useState('');
+
+  const loadHistory = () => { API.listSessions().then(setHistory).catch(() => { }); };
 
   useEffect(() => {
     onToast((m, e) => { setToastMsg({ m, e }); setTimeout(() => setToastMsg(null), e ? 6500 : 3000); });
@@ -38,8 +54,19 @@ export function App() {
       s.set({ templates: t });
       if (t.find((x) => x.template_id === 'ent')) s.set({ templateId: 'ent' });
       else if (t[0]) s.set({ templateId: t[0].template_id });
-    }).catch(() => {});
+    }).catch(() => { });
+    loadHistory();
   }, []);
+
+  // Reopen one of the user's past consultations (loads its saved outputs).
+  async function openSession(sid: string) {
+    try {
+      s.resetSession();
+      const meta: any = await API.api(`/sessions/${sid}`);
+      s.set({ sessionId: sid, reviewState: meta.state, activeTab: 'note' });
+      await loadOutputs(sid);
+    } catch (e: any) { toast(e.message || 'could not open consultation', true); }
+  }
 
   const setTheme = (t: string) => {
     document.documentElement.dataset.theme = t;
@@ -56,6 +83,16 @@ export function App() {
     // Don't force the active tab here — the refine pass calls this while the user may be
     // viewing another tab; callers that should land on the note set it explicitly.
     s.set({ note, risk, extraction, raw, clean });
+
+    if (raw && raw.segments && Array.isArray(raw.segments)) {
+      const mapped = raw.segments.map((x: any) => ({
+        speaker: x.speaker || 'unknown',
+        text: x.text || '',
+        span_id: x.id || x.span_id || `legacy-${Math.random()}`,
+        final: true,
+      }));
+      s.replaceSegments(mapped);
+    }
   }
 
   // ── Streaming consult via WebSocket ────────────────────────────────────────
@@ -76,6 +113,7 @@ export function App() {
         onDraft: async (d) => {
           s.set({ reviewState: d.state as API.ReviewState, grounding: d.grounding, recording: false, busy: false, activeTab: 'note' });
           await loadOutputs(d.session_id);   // server-provided id — avoids the stale-snapshot bug
+          loadHistory();                     // surface the new consult in "My consultations"
           toast(`Draft ready — risk ${Math.round((d.risk_score || 0) * 100)}%.`);
         },
         // Refine pass: diarized transcript + sharpened outputs — re-fetch everything.
@@ -122,7 +160,7 @@ export function App() {
 
   async function doTransition(state: string, extra: any = {}) {
     if (!s.sessionId) return;
-    try { const r: any = await API.transition(s.sessionId, { state, ...extra }); s.set({ reviewState: r.state }); toast('→ ' + state.replace('_', ' ')); return r; }
+    try { const r: any = await API.transition(s.sessionId, { state, ...extra }); s.set({ reviewState: r.state }); loadHistory(); toast('→ ' + state.replace('_', ' ')); return r; }
     catch (e: any) { toast(e.message, true); throw e; }
   }
 
@@ -155,12 +193,22 @@ export function App() {
           {s.confidenceBand && (
             <ConfidenceChip band={s.confidenceBand} reasons={s.confidenceReasons} />
           )}
-          <label className="ctrl">role
-            <select value={s.role} onChange={(e) => { s.set({ role: e.target.value }); API.setRole(e.target.value); }}>
-              <option value="doctor">doctor</option><option value="scribe">scribe</option><option value="admin">admin</option>
-            </select>
-          </label>
+          {!session && (
+            <label className="ctrl">role
+              <select value={s.role} onChange={(e) => { s.set({ role: e.target.value }); API.setRole(e.target.value); }}>
+                <option value="doctor">doctor</option><option value="scribe">scribe</option><option value="admin">admin</option>
+              </select>
+            </label>
+          )}
           <div className="seg-theme">{THEMES.map((t) => <button key={t} className={document.documentElement.dataset.theme === t ? 'active' : ''} onClick={() => setTheme(t)}>{t[0].toUpperCase() + t.slice(1)}</button>)}</div>
+          {session && (
+            <span className="ctrl" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span title={session.user.email || ''} style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
+                {session.user.email}
+              </span>
+              <button onClick={() => signOut()}>Sign out</button>
+            </span>
+          )}
         </div>
       </header>
 
@@ -187,11 +235,55 @@ export function App() {
           {s.sessionId && !s.reviewSubmitted && s.reviewState && !['listening', 'processing'].includes(s.reviewState) && (
             <ReviewPrompt sessionId={s.sessionId} onSubmit={() => s.set({ reviewSubmitted: true })} />
           )}
+          {session && history.length > 0 && (
+            <div className="card" style={{ marginTop: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <b>My consultations</b>
+                <button onClick={loadHistory} title="Refresh" className="btn ghost sm" style={{ padding: '2px 8px' }}>↻</button>
+              </div>
+              <input
+                type="text"
+                className="consultations-search"
+                placeholder="Search ID, template, state..."
+                value={filterQuery}
+                onChange={(e) => setFilterQuery(e.target.value)}
+              />
+              <ul className="consultations-list">
+                {history.filter((h) => {
+                  const q = filterQuery.toLowerCase();
+                  return h.session_id.toLowerCase().includes(q) || (h.template_id || '').toLowerCase().includes(q) || (h.state || '').toLowerCase().includes(q) || (h.signed_by_name || '').toLowerCase().includes(q);
+                }).map((h) => (
+                  <li key={h.session_id} className={`consultation-item ${h.session_id === s.sessionId ? 'active' : ''}`} onClick={() => openSession(h.session_id)}>
+                    <div className="consultation-header">
+                      <span className="consultation-id">{h.session_id.replace('sess-', '')}</span>
+                      {h.template_id && <span className="consultation-tag">{h.template_id}</span>}
+                    </div>
+                    <div className="consultation-footer">
+                      <span className="consultation-date">{formatSessionDate(h.created_at)}</span>
+                      <span className={`state-badge ${h.state}`}>{h.state.replace(/_/g, ' ')}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </aside>
 
         <section className="right">
           {!s.sessionId && !live ? (
-            <div className="card muted empty">Start a consult — record live (streaming), upload audio, or simulate.</div>
+            <div className="empty-scene-container">
+              <ThreeScene recording={s.recording} busy={s.busy} />
+              <div className="empty-scene-overlay">
+                <div className="empty-card-glass">
+                  <h2>Svaani. Scribe</h2>
+                  <p>Start a consult — record live (streaming), upload audio, or simulate from the capture panel.</p>
+                  <div className="pulse-indicator">
+                    <span className="pulse-dot"></span>
+                    System Active &amp; Ready
+                  </div>
+                </div>
+              </div>
+            </div>
           ) : (
             <>
               <Tabs active={s.activeTab} onTab={(t) => s.set({ activeTab: t })} role={s.role} />

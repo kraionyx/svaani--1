@@ -80,3 +80,10 @@ class SqlSessionStore(SessionStore):
 
     def persist(self, session: ConsultationSession) -> None:
         self._save(session)
+
+    def close(self) -> None:
+        """Close the SQLite connection (called at app shutdown)."""
+        try:
+            self._db.close()
+        except Exception:  # noqa: BLE001 — shutdown best-effort
+            pass

@@ -1,27 +1,119 @@
 """Pluggable authentication: dev header scaffold ↔ verified JWT bearer.
 
 ``SCRIBE_AUTH_MODE=dev`` (default) keeps the ``X-User-Id`` / ``X-Role`` header scaffold
-so local runs and tests need no token. ``=jwt`` requires a verified bearer token:
-HS256 with ``SCRIBE_JWT_SECRET`` (dev/test), or RS256 verified against a Keycloak/OIDC
-``SCRIBE_JWT_JWKS_URL``. ``PyJWT`` is imported lazily so the app boots without it.
+so local runs and tests need no token. ``=jwt`` requires a verified bearer token.
+
+Designed for **Supabase Auth** (Google + email/password), but provider-agnostic. The
+token's ``alg`` header selects the verification path automatically:
+
+* ``HS256`` → symmetric, verified with ``SCRIBE_JWT_SECRET`` (the Supabase project's
+  JWT secret; also used for dev/test tokens).
+* ``RS256`` / ``ES256`` → asymmetric, verified against the JWKS endpoint
+  (``SCRIBE_JWT_JWKS_URL``, or auto-derived from ``SCRIBE_SUPABASE_URL``).
+* **No secret configured** → fall back to asking Supabase to validate the token
+  (``GET /auth/v1/user``) using only the public ``SCRIBE_SUPABASE_URL`` +
+  ``SCRIBE_SUPABASE_ANON_KEY``. Works out-of-the-box; results are cached briefly so it's
+  one network call per token, not per request. Paste the JWT secret to upgrade to
+  zero-network local verification.
 
 The verified claims become the same ``Principal`` the RBAC layer already understands —
-``sub`` → id, ``role`` claim → ``Role`` — so every existing permission check is unchanged.
+``sub`` → id (the auth.users UUID, used as ``practitioner_id``), email + app role from
+the claims — so every existing permission check is unchanged. ``PyJWT`` is imported
+lazily so the app still boots in dev mode without it.
 """
 from __future__ import annotations
+
+import json
+import logging
+import time
+import urllib.error
+import urllib.request
+from functools import lru_cache
 
 from app.config import Settings
 from app.security.rbac import Principal, Role
 
+# Dedicated auth logger. Set SCRIBE_LOG_LEVEL=DEBUG to see per-request verification detail
+# (chosen path, token alg, resolved user) on stdout; failures always log at WARNING.
+logger = logging.getLogger("svaani.auth")
+
+# Short-lived cache of remotely-verified tokens: token -> (claims, expiry_epoch). Supabase
+# access tokens live ~1h; caching the validation for 60s collapses the per-request /auth/v1/user
+# round-trips while still re-checking often enough to honour sign-outs/expiry promptly.
+_REMOTE_TTL_S = 60
+_remote_cache: dict[str, tuple[dict, float]] = {}
+
 
 class AuthError(Exception):
-    """Raised when a required token is missing or invalid (mapped to HTTP 401)."""
+    """Raised when a required token is missing or invalid (mapped to HTTP 401).
+
+    ``severity`` tags how the admin console should treat it: ``warning`` for client-side
+    causes (missing/expired/forged token — routine) vs ``error`` for an operational problem
+    (e.g. Supabase unreachable so we can't verify anyone). ``reason`` is a short stable code
+    for grouping in the dashboard, separate from the human message.
+    """
+
+    def __init__(self, message: str, *, severity: str = "warning", reason: str = "invalid_token") -> None:
+        super().__init__(message)
+        self.severity = severity
+        self.reason = reason
 
 
 def _bearer(authorization: str | None) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise AuthError("missing bearer token")
     return authorization.split(" ", 1)[1].strip()
+
+
+@lru_cache(maxsize=8)
+def _jwk_client(jwks_url: str):
+    """Cache one PyJWKClient per URL — it memoizes the fetched signing keys, so we avoid
+    re-downloading the JWKS on every request."""
+    from jwt import PyJWKClient
+
+    return PyJWKClient(jwks_url)
+
+
+def _verify_remote(token: str, settings: Settings) -> dict:
+    """Validate a token by asking Supabase (``GET /auth/v1/user``) and map the returned
+    user to JWT-style claims. Used only when no local signing material is configured."""
+    now = time.time()
+    cached = _remote_cache.get(token)
+    if cached and cached[1] > now:
+        logger.debug("auth: remote verify cache-hit user=%s", cached[0].get("sub"))
+        return cached[0]
+    base = settings.supabase_url.rstrip("/")
+    if not base or not settings.supabase_anon_key:
+        raise AuthError("jwt mode needs SCRIBE_JWT_SECRET, or SCRIBE_SUPABASE_URL + "
+                        "SCRIBE_SUPABASE_ANON_KEY for remote verification",
+                        severity="error", reason="auth_misconfigured")
+    t0 = time.perf_counter()
+    req = urllib.request.Request(
+        f"{base}/auth/v1/user",
+        headers={"Authorization": f"Bearer {token}", "apikey": settings.supabase_anon_key},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            user = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:  # 401/403 → token rejected by Supabase (routine)
+        logger.warning("auth: remote verify rejected token (HTTP %s)", exc.code)
+        raise AuthError(f"invalid token: {exc.code}", reason="token_rejected") from exc
+    except Exception as exc:  # network/timeout — an OPERATIONAL problem; fail closed + alert
+        logger.error("auth: remote verify UNAVAILABLE (%s) — is Supabase reachable?", exc)
+        raise AuthError(f"token verification unavailable: {exc}",
+                        severity="error", reason="verify_unavailable") from exc
+    if not user.get("id"):
+        raise AuthError("invalid token: no user", reason="token_no_user")
+    logger.debug("auth: remote verify ok user=%s (%.0fms)", user.get("id"), (time.perf_counter() - t0) * 1000)
+    claims = {
+        "sub": user["id"], "email": user.get("email"),
+        "app_metadata": user.get("app_metadata") or {},
+        "user_metadata": user.get("user_metadata") or {},
+    }
+    if len(_remote_cache) > 1024:  # crude cap so the cache can't grow unbounded
+        _remote_cache.clear()
+    _remote_cache[token] = (claims, now + _REMOTE_TTL_S)
+    return claims
 
 
 def _verify_jwt(token: str, settings: Settings) -> dict:
@@ -33,22 +125,48 @@ def _verify_jwt(token: str, settings: Settings) -> dict:
     audience = settings.jwt_audience or None
     issuer = settings.jwt_issuer or None
     try:
-        if settings.jwt_jwks_url:
-            from jwt import PyJWKClient
+        alg = (jwt.get_unverified_header(token) or {}).get("alg", "")
+    except Exception as exc:  # malformed token
+        logger.warning("auth: malformed token header (%s)", exc)
+        raise AuthError(f"invalid token header: {exc}", reason="malformed_token") from exc
 
-            key = PyJWKClient(settings.jwt_jwks_url).get_signing_key_from_jwt(token).key
-            return jwt.decode(token, key, algorithms=["RS256"], audience=audience, issuer=issuer)
+    try:
+        if alg.startswith(("RS", "ES", "PS")):  # asymmetric (Supabase signing keys / Keycloak)
+            jwks_url = settings.supabase_jwks_url
+            if not jwks_url:
+                raise AuthError("asymmetric token but no JWKS URL "
+                                "(set SCRIBE_JWT_JWKS_URL or SCRIBE_SUPABASE_URL)",
+                                severity="error", reason="auth_misconfigured")
+            logger.debug("auth: verifying via JWKS (alg=%s)", alg)
+            key = _jwk_client(jwks_url).get_signing_key_from_jwt(token).key
+            return jwt.decode(token, key, algorithms=["RS256", "ES256", "PS256"],
+                              audience=audience, issuer=issuer)
+        # Symmetric (Supabase legacy JWT secret / dev/test tokens). With no secret set,
+        # fall back to remote verification via the Supabase Auth API (anon key only).
         if not settings.jwt_secret:
-            raise AuthError("jwt mode needs SCRIBE_JWT_SECRET or SCRIBE_JWT_JWKS_URL")
-        return jwt.decode(token, settings.jwt_secret, algorithms=["HS256"], audience=audience, issuer=issuer)
+            logger.debug("auth: verifying remotely (no local secret/JWKS)")
+            return _verify_remote(token, settings)
+        logger.debug("auth: verifying via local HS256 secret (alg=%s)", alg or "HS256")
+        return jwt.decode(token, settings.jwt_secret, algorithms=["HS256"],
+                          audience=audience, issuer=issuer)
     except AuthError:
         raise
     except Exception as exc:  # invalid signature / expired / wrong aud — all 401
-        raise AuthError(f"invalid token: {exc}") from exc
+        logger.warning("auth: token verification failed (%s: %s)", type(exc).__name__, exc)
+        raise AuthError(f"invalid token: {exc}", reason="verify_failed") from exc
 
 
 def _role_of(claims: dict) -> Role:
-    raw = claims.get("role") or claims.get("https://svaani/role") or "doctor"
+    """Resolve the app role from the token. Supabase sets the top-level ``role`` claim to
+    the Postgres role (``authenticated``), so the app role lives in a custom claim — set
+    via an access-token hook or ``app_metadata``. Absent that, every signed-in user is a
+    DOCTOR (the clinician workflow); ADMIN stays gated by the separate admin password."""
+    meta = claims.get("app_metadata") or {}
+    user_meta = claims.get("user_metadata") or {}
+    raw = (claims.get("app_role") or meta.get("role")
+           or user_meta.get("role") or claims.get("https://svaani/role"))
+    if not raw or raw == "authenticated":
+        return Role.DOCTOR
     try:
         return Role(raw)
     except ValueError:
@@ -62,5 +180,8 @@ def principal_from(
     if settings.auth_mode != "jwt":
         return Principal(id=x_user_id, role=Role(x_role))  # dev scaffold
     claims = _verify_jwt(_bearer(authorization), settings)
-    return Principal(id=str(claims.get("sub") or claims.get("preferred_username") or "unknown"),
-                     role=_role_of(claims))
+    sub = str(claims.get("sub") or claims.get("preferred_username") or "unknown")
+    email = claims.get("email") or (claims.get("user_metadata") or {}).get("email")
+    principal = Principal(id=sub, role=_role_of(claims), email=email)
+    logger.debug("auth: resolved principal id=%s role=%s email=%s", sub, principal.role.value, email)
+    return principal

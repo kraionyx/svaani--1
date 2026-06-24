@@ -60,34 +60,62 @@ class SarvamSTT:
     def available(self) -> bool:
         return True
 
+    def _log_ai(self, *, model: str, agent: str, latency_ms: int, success: bool, error_message: str | None = None) -> None:
+        try:
+            from app.logging_service import get_logging_service
+            get_logging_service().log_ai(
+                model=model,
+                agent=agent,
+                latency_ms=latency_ms,
+                success=success,
+                error_message=error_message,
+            )
+        except Exception:
+            pass
+
     # ── Real-time (immediate, unlabeled) ─────────────────────────────────────
     def transcribe(self, audio: bytes, *, session_id: str) -> RawTranscript:
-        resp = self.client.speech_to_text.transcribe(
-            file=("audio.wav", audio),
-            model=self.settings.sarvam_stt_model,
-            mode=self.settings.sarvam_mode,
-            language_code=self.settings.sarvam_language_code,
-            input_audio_codec="wav",
-        )
-        lang = getattr(resp, "language_code", None) or "en-IN"
-        conf = float(getattr(resp, "language_probability", None) or 1.0)
-
-        diarized = getattr(resp, "diarized_transcript", None)
-        entries = getattr(diarized, "entries", None) if diarized else None
-        if entries:
-            return _segments_from_entries(session_id, entries, lang)
-
-        # No diarization in real-time → a single UNKNOWN-speaker segment.
-        return RawTranscript(
-            session_id=session_id,
-            segments=[TranscriptSegment(
-                id="seg-0001", speaker=SpeakerRole.UNKNOWN,
-                text=getattr(resp, "transcript", "") or "", language=lang, confidence=conf,
-            )],
-        )
+        t0 = time.perf_counter()
+        success = False
+        error_message = None
+        try:
+            resp = self.client.speech_to_text.transcribe(
+                file=("audio.wav", audio),
+                model=self.settings.sarvam_stt_model,
+                mode=self.settings.sarvam_mode,
+                language_code=self.settings.sarvam_language_code,
+                input_audio_codec="wav",
+            )
+            lang = getattr(resp, "language_code", None) or "en-IN"
+            conf = float(getattr(resp, "language_probability", None) or 1.0)
+    
+            diarized = getattr(resp, "diarized_transcript", None)
+            entries = getattr(diarized, "entries", None) if diarized else None
+            if entries:
+                success = True
+                return _segments_from_entries(session_id, entries, lang)
+    
+            # No diarization in real-time → a single UNKNOWN-speaker segment.
+            success = True
+            return RawTranscript(
+                session_id=session_id,
+                segments=[TranscriptSegment(
+                    id="seg-0001", speaker=SpeakerRole.UNKNOWN,
+                    text=getattr(resp, "transcript", "") or "", language=lang, confidence=conf,
+                )],
+            )
+        except Exception as exc:
+            error_message = str(exc)
+            raise
+        finally:
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            self._log_ai(model=self.settings.sarvam_stt_model, agent="sarvam-rt", latency_ms=latency_ms, success=success, error_message=error_message)
 
     # ── Batch (accurate, diarized) ───────────────────────────────────────────
     def transcribe_diarized(self, audio: bytes, *, session_id: str) -> RawTranscript:
+        t0 = time.perf_counter()
+        success = False
+        error_message = None
         tmpdir = tempfile.mkdtemp(prefix="sarvam_")
         in_path = os.path.join(tmpdir, f"{session_id}.wav")
         out_dir = os.path.join(tmpdir, "out")
@@ -122,8 +150,15 @@ class SarvamSTT:
             # transcript. The transcript lives in the job's output files, which must be
             # downloaded. download_outputs() writes one ``<input_filename>.json`` per file.
             self._download_outputs_resilient(job, out_dir)
-            return _parse_batch_output_dir(session_id, out_dir)
+            result = _parse_batch_output_dir(session_id, out_dir)
+            success = True
+            return result
+        except Exception as exc:
+            error_message = str(exc)
+            raise
         finally:
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            self._log_ai(model=self.settings.sarvam_stt_model, agent="sarvam-batch", latency_ms=latency_ms, success=success, error_message=error_message)
             shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _download_outputs_resilient(self, job: Any, out_dir: str, *, attempts: int = 6, delay: float = 2.0) -> None:
