@@ -135,10 +135,29 @@ export function App() {
   }
 
   async function stopRecord() {
-    s.set({ recording: false, busy: true });
+    s.set({ recording: false, paused: false, busy: true });
     try { await micRef.current?.stop(); } catch { /* ignore */ }
     micRef.current = null;
     sockRef.current?.stop();
+  }
+
+  function togglePause() {
+    const mic = micRef.current;
+    if (!mic || !s.recording) return;
+    if (mic.isPaused()) { mic.resume(); s.set({ paused: false }); toast('Recording resumed.'); }
+    else { mic.pause(); s.set({ paused: true }); toast('Recording paused.'); }
+  }
+
+  async function cancelRecord() {
+    // Abort the consult entirely — discard audio, tell the backend to drop the session,
+    // and reset the UI. No draft is generated.
+    try { await micRef.current?.stop(); } catch { /* ignore */ }
+    micRef.current = null;
+    try { sockRef.current?.cancel(); } catch { /* ignore */ }
+    sockRef.current = null;
+    s.resetSession();
+    s.set({ recording: false, paused: false, busy: false });
+    toast('Consultation cancelled.');
   }
 
   // ── REST fallbacks ─────────────────────────────────────────────────────────
@@ -217,9 +236,10 @@ export function App() {
       <main className="grid">
         <aside className="left">
           <Recorder
-            recording={s.recording} busy={live} streaming={s.streaming} stage={s.stage}
+            recording={s.recording} paused={s.paused} busy={live} streaming={s.streaming} stage={s.stage}
             templates={s.templates} templateId={s.templateId} onTemplate={(t) => s.set({ templateId: t })}
             onRecord={record} onSimulate={simulate}
+            onPause={togglePause} onCancel={cancelRecord}
             onUpload={(f) => uploadFile(f)}
             analyser={micRef.current?.analyser || null}
             modeChoice={s.modeChoice}

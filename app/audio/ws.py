@@ -90,16 +90,19 @@ async def consultation_ws(
                 await sock.flush()
                 # Let the flush's trailing final(s) arrive before we cancel the reader.
                 # Wait the full window if nothing has arrived yet; once segments appear,
-                # stop ~0.6s after they stabilize. Bounded so stop never hangs.
+                # stop ~0.3s after they stabilize. Bounded so stop never hangs. Trimmed for
+                # responsiveness: poll faster (0.15s) and require fewer stable ticks so the
+                # common case (everything already streamed) drains in ~0.3s instead of 0.6s,
+                # and a silent tail caps at 1.6s instead of 3.0s.
                 last, stable, elapsed = len(live_segments), 0, 0.0
-                while elapsed < 3.0:
-                    await asyncio.sleep(0.2); elapsed += 0.2
+                while elapsed < 1.6:
+                    await asyncio.sleep(0.15); elapsed += 0.15
                     n = len(live_segments)
                     if n > last:
                         last, stable = n, 0
                     elif n > 0:
                         stable += 1
-                        if stable >= 3:
+                        if stable >= 2:
                             break
             except Exception:  # noqa: BLE001
                 pass
@@ -154,6 +157,17 @@ async def consultation_ws(
                     auto_mode=auto_mode, manual_mode=manual_mode,
                 )
                 store.create(session)
+                # Count WS consults toward the doctor too (REST POST /sessions already does
+                # this) so session totals in the admin console are consistent across both
+                # capture paths instead of under-counting streaming consults.
+                try:
+                    from app.logging_service import get_logging_service
+                    get_logging_service().update_doctor(
+                        user_id=principal.id, increment_sessions=1, feature="session_create",
+                        email=getattr(principal, "email", None),
+                    )
+                except Exception:  # noqa: BLE001 — analytics must never break a consult
+                    pass
                 buffer.clear()
                 live_segments.clear()
                 streaming = False
@@ -186,6 +200,23 @@ async def consultation_ws(
                     })
                     continue
                 await _finalize(websocket, store, settings, session, bytes(buffer), live_segments)
+
+            # ── cancel ───────────────────────────────────────────────────────
+            elif action == "cancel":
+                # Abort the consult: tear down the live stream and discard the session
+                # without running the pipeline — no draft, no clinical record persisted.
+                await _close_stream()
+                if session is not None:
+                    try:
+                        store.delete(session.session_id)
+                    except Exception:  # noqa: BLE001 — best-effort cleanup
+                        logger.info("cancel: could not delete session %s", session.session_id, exc_info=True)
+                    session = None
+                buffer.clear()
+                live_segments.clear()
+                await websocket.send_json({"type": "stage_update", "stage": "cancelled"})
+                # The client closes right after; stop processing further frames.
+                continue
 
             elif action == "ping":
                 await websocket.send_json({"type": "pong"})
@@ -383,6 +414,7 @@ async def _finalize(
                 raw = live_raw
             if not _has_text(raw):
                 raise RuntimeError("no speech detected in audio")
+            assign_clinical_roles(raw)
             await _emit_pass(websocket, store, settings, session, raw, template, refine=False)
 
         if session.auto_mode:
@@ -407,6 +439,7 @@ async def _finalize(
                 await _emit_pass(websocket, store, settings, session, live_raw, template, refine=False)
                 diar_raw = await _diarize(settings, session.session_id, pcm)
                 if diar_raw is not None and _has_text(diar_raw):
+                    assign_clinical_roles(diar_raw)
                     await _emit_pass(websocket, store, settings, session, diar_raw, template, refine=True)
             else:
                 await _single_diarized_pass()

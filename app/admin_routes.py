@@ -18,9 +18,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import re
-import json
+import logging
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import Optional
+
+logger = logging.getLogger("svaani.admin")
 
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -112,6 +116,18 @@ def admin_errors(
     )
 
 
+@router.get("/errors/grouped", include_in_schema=False)
+def admin_error_groups(
+    limit: int = Query(50, ge=1, le=200),
+    severity: str = "", source: str = "", from_dt: str = "", to_dt: str = "",
+    _: None = Depends(_require_admin),
+) -> dict:
+    """Distinct error signatures with counts — the default, debuggable Errors view."""
+    return get_logging_service().query_error_groups(
+        limit=limit, severity=severity, source=source, from_dt=from_dt, to_dt=to_dt,
+    )
+
+
 def _percentile(values: list[int], pct: float) -> int:
     if not values:
         return 0
@@ -153,64 +169,116 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
 
+
+# The live-context block was the latency sink: it ran ~13 sequential REMOTE Supabase
+# round-trips (overview + health + errors + logs, each several statements) on EVERY chat
+# turn, *before* the LLM even started. We now (1) gather those four sources CONCURRENTLY
+# and (2) cache the assembled block briefly so rapid back-and-forth doesn't re-query the DB
+# each time. Net effect: context build drops from seconds to ~0 on a cache hit and to one
+# round-trip-worth on a miss, leaving the LLM call as the only real cost.
+_CTX_TTL_S = 10.0
+_CTX_LLM_TIMEOUT_S = 25.0
+_ctx_cache: dict = {"ts": 0.0, "text": ""}
+_ctx_lock = threading.Lock()
+_sarvam_client = None
+_sarvam_lock = threading.Lock()
+
+
+def _get_sarvam_client():
+    """Build the Sarvam client once and reuse it (httpx connection pooling)."""
+    global _sarvam_client
+    if _sarvam_client is not None:
+        return _sarvam_client
+    with _sarvam_lock:
+        if _sarvam_client is None:
+            from sarvamai import SarvamAI
+            _sarvam_client = SarvamAI(api_subscription_key=get_settings().agent_api_key)
+    return _sarvam_client
+
+
+def _build_chat_context(svc) -> str:
+    """Assemble the live-system context block, gathering all sources concurrently."""
+    def _safe(fn, default):
+        try:
+            return fn()
+        except Exception:  # noqa: BLE001 — context is best-effort; never fail the chat
+            logger.debug("chat context source failed", exc_info=True)
+            return default
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_overview = ex.submit(_safe, svc.query_overview, {})
+        f_health = ex.submit(_safe, svc.query_system_health, {})
+        f_errors = ex.submit(_safe, lambda: svc.query_errors(limit=5), {})
+        f_logs = ex.submit(_safe, lambda: svc.query_logs(limit=8), {})
+        overview = f_overview.result()
+        health = f_health.result()
+        err_data = f_errors.result()
+        log_data = f_logs.result()
+
+    kpis = overview.get("kpis", {})
+    ctx = "LIVE SYSTEM CONTEXT:\n"
+    ctx += f"- Requests (24h): {kpis.get('total_requests_24h', 0)}\n"
+    ctx += f"- Error Rate: {kpis.get('error_rate_pct', 0)}%\n"
+    ctx += f"- Avg Latency: {kpis.get('avg_latency_ms', 0)}ms\n"
+    ctx += f"- AI Calls (24h): {kpis.get('ai_calls_24h', 0)}\n\n"
+
+    ctx += "RECENT ERRORS SUMMARY:\n"
+    for e in overview.get("recent_errors", [])[:8]:
+        ctx += f"- {e.get('severity', 'error')} ({e.get('source')}): {e.get('error_type')} - {e.get('error_message')}\n"
+
+    ctx += "\nSLOWEST ENDPOINTS:\n"
+    for ep in health.get("slowest_endpoints", [])[:5]:
+        ctx += f"- {ep.get('endpoint')}: {ep.get('avg_ms')}ms avg\n"
+
+    detailed_errors = err_data.get("errors", [])
+    if detailed_errors:
+        ctx += "\nDETAILED RECENT ERRORS (WITH STACK TRACES):\n"
+        for idx, e in enumerate(detailed_errors):
+            ctx += f"[{idx+1}] ID: {e.get('id')}\n"
+            ctx += f"    Time: {e.get('created_at')}\n"
+            ctx += f"    Type: {e.get('error_type')} | Message: {e.get('error_message')}\n"
+            ctx += f"    Source: {e.get('source')} | Endpoint: {e.get('endpoint')} | Severity: {e.get('severity')}\n"
+            if e.get('stack_trace'):
+                st_lines = e.get('stack_trace', '').split('\n')[:15]
+                ctx += "    Stack Trace excerpt:\n      " + "\n      ".join(st_lines) + "\n"
+            if e.get('ai_analysis'):
+                ctx += f"    Pre-triaged Agent Analysis: {e.get('ai_analysis')}\n"
+            ctx += "\n"
+
+    detailed_logs = log_data.get("logs", [])
+    if detailed_logs:
+        ctx += "\nRECENT APPLICATION LOGS:\n"
+        for l in detailed_logs:
+            ctx += (f"- [{l.get('created_at')}] {l.get('method')} {l.get('endpoint')} | "
+                    f"Status: {l.get('status_code')} | Duration: {l.get('duration_ms')}ms | "
+                    f"User: {l.get('user_id')}\n")
+    return ctx
+
+
+def _chat_context(svc) -> str:
+    """Return the context block, served from a short-lived cache when fresh."""
+    now = time.time()
+    with _ctx_lock:
+        if _ctx_cache["text"] and (now - _ctx_cache["ts"]) < _CTX_TTL_S:
+            return _ctx_cache["text"]
+    try:
+        text = _build_chat_context(svc)
+    except Exception:  # noqa: BLE001
+        logger.warning("chat context build failed", exc_info=True)
+        text = "Live system context is currently unavailable."
+    with _ctx_lock:
+        _ctx_cache["ts"] = now
+        _ctx_cache["text"] = text
+    return text
+
+
 @router.post("/chat", include_in_schema=False)
 def admin_chat(req: ChatRequest, _: None = Depends(_require_admin)) -> dict:
-    svc = get_logging_service()
-    
-    try:
-        overview = svc.query_overview()
-        health = svc.query_system_health()
-        recent_errs = overview.get("recent_errors", [])
-        kpis = overview.get("kpis", {})
-        
-        ctx = "LIVE SYSTEM CONTEXT:\n"
-        ctx += f"- Requests (24h): {kpis.get('total_requests_24h', 0)}\n"
-        ctx += f"- Error Rate: {kpis.get('error_rate_pct', 0)}%\n"
-        ctx += f"- Avg Latency: {kpis.get('avg_latency_ms', 0)}ms\n"
-        ctx += f"- AI Calls (24h): {kpis.get('ai_calls_24h', 0)}\n\n"
-        
-        ctx += "RECENT ERRORS SUMMARY:\n"
-        for e in recent_errs[:8]:
-            ctx += f"- {e.get('severity', 'error')} ({e.get('source')}): {e.get('error_type')} - {e.get('error_message')}\n"
-            
-        ctx += "\nSLOWEST ENDPOINTS:\n"
-        for ep in health.get("slowest_endpoints", [])[:5]:
-            ctx += f"- {ep.get('endpoint')}: {ep.get('avg_ms')}ms avg\n"
+    agent_key = get_settings().agent_api_key
+    if not agent_key:
+        raise HTTPException(status_code=500, detail="SCRIBE_AGENT_API_KEY is not configured.")
 
-        # Dynamically inject the most recent detailed errors with their stack traces and AI logs
-        try:
-            err_data = svc.query_errors(limit=5)
-            detailed_errors = err_data.get("errors", [])
-            if detailed_errors:
-                ctx += "\nDETAILED RECENT ERRORS (WITH STACK TRACES):\n"
-                for idx, e in enumerate(detailed_errors):
-                    ctx += f"[{idx+1}] ID: {e.get('id')}\n"
-                    ctx += f"    Time: {e.get('created_at')}\n"
-                    ctx += f"    Type: {e.get('error_type')} | Message: {e.get('error_message')}\n"
-                    ctx += f"    Source: {e.get('source')} | Endpoint: {e.get('endpoint')} | Severity: {e.get('severity')}\n"
-                    if e.get('stack_trace'):
-                        st_lines = e.get('stack_trace', '').split('\n')[:15]
-                        ctx += f"    Stack Trace excerpt:\n      " + "\n      ".join(st_lines) + "\n"
-                    if e.get('ai_analysis'):
-                        ctx += f"    Pre-triaged Agent Analysis: {e.get('ai_analysis')}\n"
-                    ctx += "\n"
-        except Exception as e_err:
-            ctx += f"\nDetailed error logs query failed: {str(e_err)}\n"
-
-        # Dynamically inject recent request logs
-        try:
-            log_data = svc.query_logs(limit=8)
-            detailed_logs = log_data.get("logs", [])
-            if detailed_logs:
-                ctx += "\nRECENT APPLICATION LOGS:\n"
-                for l in detailed_logs:
-                    ctx += f"- [{l.get('created_at')}] {l.get('method')} {l.get('endpoint')} | Status: {l.get('status_code')} | Duration: {l.get('duration_ms')}ms | User: {l.get('user_id')}\n"
-        except Exception as e_log:
-            ctx += f"\nDetailed request logs query failed: {str(e_log)}\n"
-            
-    except Exception:
-        ctx = "Live system context is currently unavailable."
-
+    ctx = _chat_context(get_logging_service())
     sys_prompt = {
         "role": "system",
         "content": (
@@ -219,26 +287,27 @@ def admin_chat(req: ChatRequest, _: None = Depends(_require_admin)) -> dict:
             "You have access to the following live metrics, request logs, and error stack traces from the database:\n\n"
             f"{ctx}\n\n"
             "Keep your answers concise, technical, and directly address the developer's question. Use markdown formatting."
-        )
+        ),
     }
-    
     messages = [sys_prompt] + [m.model_dump() for m in req.messages]
-    
+
+    # Bound the LLM call so a hung upstream can't pin the request for minutes. The call runs
+    # in its own thread; we wait at most _CTX_LLM_TIMEOUT_S for it.
+    def _call() -> str:
+        client = _get_sarvam_client()
+        response = client.chat.completions(model="sarvam-105b", messages=messages, temperature=0.0)
+        return response.choices[0].message.content
+
+    started = time.perf_counter()
     try:
-        agent_key = get_settings().agent_api_key
-        if not agent_key:
-            raise HTTPException(status_code=500, detail="SCRIBE_AGENT_API_KEY is not configured.")
-        
-        from sarvamai import SarvamAI
-        client = SarvamAI(api_subscription_key=agent_key)
-        response = client.chat.completions(
-            model="sarvam-105b",
-            messages=messages,
-            temperature=0.0
-        )
-        return {"response": response.choices[0].message.content}
-    except Exception as e:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            content = ex.submit(_call).result(timeout=_CTX_LLM_TIMEOUT_S)
+    except FuturesTimeout:
+        raise HTTPException(status_code=504, detail=f"AI Agent timed out after {_CTX_LLM_TIMEOUT_S:.0f}s")
+    except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"AI Agent failed: {str(e)}")
+    logger.info("admin_chat completed in %dms", int((time.perf_counter() - started) * 1000))
+    return {"response": content}
 
 
 # ── Old operational metrics (Repository) ─────────────────────────────────────

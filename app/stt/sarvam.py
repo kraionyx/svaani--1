@@ -161,7 +161,7 @@ class SarvamSTT:
             self._log_ai(model=self.settings.sarvam_stt_model, agent="sarvam-batch", latency_ms=latency_ms, success=success, error_message=error_message)
             shutil.rmtree(tmpdir, ignore_errors=True)
 
-    def _download_outputs_resilient(self, job: Any, out_dir: str, *, attempts: int = 6, delay: float = 2.0) -> None:
+    def _download_outputs_resilient(self, job: Any, out_dir: str, *, attempts: int = 7, delay: float = 0.6) -> None:
         """Download batch outputs, tolerating Sarvam's eventual consistency.
 
         ``wait_until_complete()`` can report COMPLETED from the status service while the
@@ -169,8 +169,14 @@ class SarvamSTT:
         400 ("Job ... is not in COMPLETED state"). The job IS done — the endpoint just
         hasn't caught up — so retry the download across that propagation window before
         giving up (the WS path then falls back to the live streamed segments).
+
+        Retry with exponential backoff starting at a short delay: the propagation lag is
+        usually well under a second, so probing again quickly (0.6s) gets the transcript to
+        the doctor sooner than the old fixed 2s wait, while the backoff still bounds total
+        wait if the lag is genuinely long.
         """
         last_exc: Exception | None = None
+        cur_delay = delay
         for attempt in range(1, attempts + 1):
             try:
                 job.download_outputs(out_dir)
@@ -189,9 +195,10 @@ class SarvamSTT:
                 if not transient:
                     raise
                 last_exc = exc
-                logger.info("Sarvam outputs not yet downloadable (attempt %d/%d); retrying in %.0fs",
-                            attempt, attempts, delay)
-                time.sleep(delay)
+                logger.info("Sarvam outputs not yet downloadable (attempt %d/%d); retrying in %.1fs",
+                            attempt, attempts, cur_delay)
+                time.sleep(cur_delay)
+                cur_delay = min(cur_delay * 1.6, 3.0)
         raise RuntimeError(f"Sarvam batch outputs never became downloadable after {attempts} tries: {last_exc}")
 
     # ── Dispatch + fallback ──────────────────────────────────────────────────

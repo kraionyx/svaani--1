@@ -19,8 +19,28 @@ from app.logging_config import request_id_ctx
 logger = logging.getLogger("svaani.access")
 _ID_SEG = re.compile(r"^(sess-[0-9a-f]+|[0-9a-f]{8,}|\d+)$", re.IGNORECASE)
 
-# Endpoints too noisy / low-value to log to Supabase (still logged to stdout).
-_SKIP_SUPABASE = {"/health", "/metrics", "/admin1/api/errors/frontend"}
+# Analytics must measure the PRODUCT, not the infrastructure or the observability tooling
+# itself. Anything matched here is still logged to stdout but kept OUT of the Supabase
+# analytics tables, so request counts / latency / "slowest endpoints" / doctor activity
+# reflect real clinician usage instead of self-traffic.
+_SKIP_EXACT = {
+    "/", "/health", "/health/ready", "/metrics", "/favicon.ico",
+    "/auth/config",            # polled by the SPA bootstrap on every load
+    "/admin1", "/admin1/",     # the admin SPA shell
+}
+_SKIP_PREFIXES = (
+    "/admin1/api",             # the admin console polling ITSELF — never count as product usage
+    "/app", "/ui", "/assets", "/static",  # SPA shell + static assets
+)
+
+
+def _should_log_to_supabase(method: str, path: str) -> bool:
+    """True if this request is real product traffic worth recording for analytics."""
+    if method == "OPTIONS":        # CORS preflight — pure browser chatter
+        return False
+    if path in _SKIP_EXACT:
+        return False
+    return not any(path == p or path.startswith(p + "/") or path.startswith(p) for p in _SKIP_PREFIXES)
 
 
 def _apply_security_headers(response: Response, settings: Settings) -> None:
@@ -92,8 +112,8 @@ def setup_observability(app: FastAPI, settings: Settings) -> None:
 
             request_id_ctx.reset(token)
 
-            # Non-blocking write to Supabase (skips noisy health/metrics endpoints).
-            if path not in _SKIP_SUPABASE:
+            # Non-blocking write to Supabase (skips infra/static/admin-self traffic).
+            if _should_log_to_supabase(request.method, path):
                 try:
                     from app.logging_service import get_logging_service
                     svc = get_logging_service()

@@ -10,7 +10,9 @@ import './styles.css';
 
 // Dev (Vite :5173): pathname is /admin1
 // Prod (FastAPI /admin1 → serves SPA): pathname is /admin1 or /admin1/
-const isAdmin = window.location.pathname.startsWith('/admin1');
+// Also accept /app/admin1 — the SPA's base is /app/, so a relative link from the main app
+// can land there; without this it would fall through to the gated app instead of the console.
+const isAdmin = /(^|\/)admin1(\/|$)/.test(window.location.pathname);
 
 if (!isAdmin) {
   const theme = localStorage.getItem('svaani-theme') || 'mint';

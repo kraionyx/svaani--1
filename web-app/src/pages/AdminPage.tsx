@@ -284,7 +284,22 @@ function TabLogs() {
 }
 
 // ── Tab: Errors ────────────────────────────────────────────────────────────
+function relTime(iso?: string): string {
+  if (!iso) return '—';
+  const t = new Date(iso.replace(' ', 'T')).getTime();
+  if (isNaN(t)) return iso;
+  const s = Math.floor((Date.now() - t) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+// Grouped (default) view: each DISTINCT error signature once, with how many times it fired
+// and when it first/last occurred — so repeated failures don't flood the list. Toggle to the
+// raw Timeline for chronological, per-occurrence inspection.
 function TabErrors() {
+  const [view, setView] = useState<'grouped' | 'timeline'>('grouped');
   const [data, setData] = useState<any>(null);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({ severity: '', source: '', from_dt: '', to_dt: '' });
@@ -292,17 +307,42 @@ function TabErrors() {
   const [err, setErr] = useState('');
 
   const load = useCallback(() => {
-    const q = new URLSearchParams({ page: String(page), limit: '50', ...filters });
-    api(`/errors?${q}`).then(setData).catch((e) => setErr(e.message));
-  }, [page, filters]);
+    setErr('');
+    if (view === 'grouped') {
+      const q = new URLSearchParams({ limit: '100', ...filters });
+      api(`/errors/grouped?${q}`).then(setData).catch((e) => setErr(e.message));
+    } else {
+      const q = new URLSearchParams({ page: String(page), limit: '50', ...filters });
+      api(`/errors?${q}`).then(setData).catch((e) => setErr(e.message));
+    }
+  }, [view, page, filters]);
 
   useEffect(() => { load(); }, [load]);
 
+  const groups = data?.groups || [];
   const errors = data?.errors || [];
+
+  const Toggle = (
+    <div style={{ display: 'flex', gap: 0, border: '1px solid #1e293b', borderRadius: 6, overflow: 'hidden' }}>
+      {(['grouped', 'timeline'] as const).map((v) => (
+        <button
+          key={v}
+          onClick={() => { setView(v); setPage(1); setData(null); }}
+          style={{
+            ...css.smBtn, borderRadius: 0, border: 'none',
+            background: view === v ? '#a3e635' : 'transparent',
+            color: view === v ? '#0a0e16' : '#94a3b8', fontWeight: view === v ? 700 : 500,
+            textTransform: 'capitalize',
+          }}
+        >{v}</button>
+      ))}
+    </div>
+  );
 
   return (
     <div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14, alignItems: 'flex-end' }}>
+        {Toggle}
         {Object.entries({ Severity: 'severity', Source: 'source', 'From (ISO)': 'from_dt', 'To (ISO)': 'to_dt' }).map(([label, key]) => (
           <FilterInput
             key={key}
@@ -314,7 +354,60 @@ function TabErrors() {
         <button style={css.btn} onClick={load}>Apply</button>
       </div>
       {err && <div style={css.errBox}>{err}</div>}
-      {!data ? <div style={css.spinner}>Loading…</div> : (
+      {!data ? <div style={css.spinner}>Loading…</div> : view === 'grouped' ? (
+        <div>
+          {groups.length === 0 && <div style={{ color: '#64748b', fontSize: 13 }}>No errors found.</div>}
+          {groups.map((g: any, i: number) => {
+            const id = `g${i}`;
+            return (
+              <div key={id} style={{ ...css.errRow, borderLeft: `3px solid ${severityColor(g.severity)}` }}>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <span style={{
+                    minWidth: 38, textAlign: 'center', fontSize: 12, fontWeight: 800,
+                    color: '#0a0e16', background: severityColor(g.severity), borderRadius: 10, padding: '1px 8px',
+                  }}>{g.count}×</span>
+                  <span style={{ fontSize: 11, color: severityColor(g.severity), fontWeight: 600, minWidth: 56 }}>{g.severity}</span>
+                  <span style={{ fontSize: 11, color: '#94a3b8', minWidth: 64 }}>{g.source}</span>
+                  <span style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 600 }}>{g.error_type}</span>
+                  <span style={{ fontSize: 12, color: '#cbd5e1', flex: 1, minWidth: 120 }}>{(g.message || '').slice(0, 90)}</span>
+                  <span style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap' }} title={`first ${g.first_seen}\nlast ${g.last_seen}`}>
+                    last {relTime(g.last_seen)}
+                  </span>
+                </div>
+                <div style={css.errStackSection}>
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button style={css.smBtn} onClick={() => setExpanded(expanded === id ? null : id)}>
+                      {expanded === id ? 'Hide' : 'Details'}
+                    </button>
+                    {g.sample_endpoint && <span style={{ fontSize: 11, color: '#64748b' }}>at <code style={{ color: '#94a3b8' }}>{g.sample_endpoint}</code></span>}
+                    <span style={{ fontSize: 11, color: '#64748b' }}>first seen {relTime(g.first_seen)}</span>
+                    {g.sample_ai && (
+                      <span style={{ background: 'rgba(59,130,246,0.1)', color: '#3b82f6', padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 500 }}>🤖 Agent Analysis</span>
+                    )}
+                  </div>
+                  {expanded === id && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 8 }}>
+                      {g.sample_ai && (
+                        <div style={{ background: '#1e293b', padding: 12, borderRadius: 4 }}>
+                          <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Agent Triaged Analysis (latest sample)</div>
+                          <pre style={{ margin: 0, fontSize: '0.85rem', color: '#f1f5f9', whiteSpace: 'pre-wrap', fontFamily: 'system-ui, sans-serif' }}>{g.sample_ai}</pre>
+                        </div>
+                      )}
+                      {g.sample_stack && (
+                        <div>
+                          <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: 4 }}>Stack Trace (latest sample)</div>
+                          <pre style={css.errStack}>{g.sample_stack}</pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          <div style={{ marginTop: 12, fontSize: 12, color: '#64748b' }}>{groups.length} distinct error{groups.length === 1 ? '' : 's'} (ranked by frequency).</div>
+        </div>
+      ) : (
         <div>
           {errors.length === 0 && <div style={{ color: '#64748b', fontSize: 13 }}>No errors found.</div>}
           {errors.map((e: any) => (
@@ -332,17 +425,7 @@ function TabErrors() {
                     {expanded === e.id ? 'Hide' : 'Details'}
                   </button>
                   {e.ai_analysis && (
-                    <span style={{
-                      backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                      color: '#3b82f6',
-                      padding: '2px 8px',
-                      borderRadius: '12px',
-                      fontSize: '0.85rem',
-                      fontWeight: 500,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}>🤖 Agent Analysis Available</span>
+                    <span style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6', padding: '2px 8px', borderRadius: '12px', fontSize: '0.85rem', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '4px' }}>🤖 Agent Analysis Available</span>
                   )}
                 </div>
                 {expanded === e.id && (

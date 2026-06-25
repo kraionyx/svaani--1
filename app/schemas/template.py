@@ -80,6 +80,11 @@ class TemplateDefinition(BaseModel):
     hospital_id: str | None = None
     description: str | None = None
     sections: list[TemplateSection] = Field(default_factory=list)
+    # When True, sections with no grounded content are dropped from the rendered note
+    # entirely (a "dynamic" note that shows ONLY what was actually discussed — no empty
+    # headings, no "Not discussed" placeholders). Default False so existing templates keep
+    # rendering every enabled section (and stay editable section-by-section).
+    omit_empty_sections: bool = False
 
     @model_validator(mode="after")
     def _unique_section_ids(self) -> "TemplateDefinition":

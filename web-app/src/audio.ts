@@ -5,6 +5,9 @@ const TARGET_RATE = 16000;
 
 export interface MicHandle {
   stop: () => Promise<Int16Array>;   // resolves with the full captured 16 kHz PCM16
+  pause: () => void;                 // stop capturing/streaming audio (paused segment is dropped)
+  resume: () => void;                // resume capturing/streaming
+  isPaused: () => boolean;
   analyser: AnalyserNode;
 }
 
@@ -39,9 +42,13 @@ export async function startMic(onChunk: (pcm: Int16Array) => void): Promise<MicH
   const collected: Int16Array[] = [];
   let pending: Float32Array[] = [];
   let pendingLen = 0;
+  let paused = false;
   const flushEvery = Math.floor(ctx.sampleRate * 0.25); // ~250ms
 
   const onFrame = (frame: Float32Array) => {
+    // While paused, drop frames entirely — neither streamed nor kept in the final buffer,
+    // so the paused interval simply doesn't exist in the recording.
+    if (paused) return;
     pending.push(frame); pendingLen += frame.length;
     if (pendingLen >= flushEvery) {
       const merged = new Float32Array(pendingLen); let o = 0;
@@ -80,7 +87,21 @@ export async function startMic(onChunk: (pcm: Int16Array) => void): Promise<MicH
     return all;
   };
 
-  return { stop, analyser };
+  const pause = () => {
+    // Flush whatever is buffered so a partial chunk isn't carried across the pause boundary.
+    if (pendingLen > 0) {
+      const merged = new Float32Array(pendingLen); let o = 0;
+      for (const f of pending) { merged.set(f, o); o += f.length; }
+      pending = []; pendingLen = 0;
+      const pcm = floatTo16k(merged, ctx.sampleRate);
+      collected.push(pcm); onChunk(pcm);
+    }
+    paused = true;
+  };
+  const resume = () => { paused = false; };
+  const isPaused = () => paused;
+
+  return { stop, pause, resume, isPaused, analyser };
 }
 
 /** Wrap 16 kHz PCM16 in a WAV container (for the REST upload fallback). */

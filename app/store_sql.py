@@ -81,6 +81,15 @@ class SqlSessionStore(SessionStore):
     def persist(self, session: ConsultationSession) -> None:
         self._save(session)
 
+    def delete(self, session_id: str) -> None:
+        """Remove a cancelled consult from the cache and the durable table."""
+        super().delete(session_id)
+        try:
+            self._db.execute("DELETE FROM sessions WHERE session_id=?", (session_id,))
+            self._db.commit()
+        except Exception:  # noqa: BLE001 — cancellation cleanup is best-effort
+            pass
+
     def close(self) -> None:
         """Close the SQLite connection (called at app shutdown)."""
         try:

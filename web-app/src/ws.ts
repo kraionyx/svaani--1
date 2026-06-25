@@ -58,5 +58,10 @@ export class ConsultSocket {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(pcm.buffer as ArrayBuffer);
   }
   stop() { if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ action: 'stop' })); }
+  // Abort the consult: tell the backend to discard (no draft is generated), then close.
+  cancel() {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ action: 'cancel' }));
+    this.close();
+  }
   close() { try { this.ws?.close(); } catch { /* ignore */ } this.ws = null; }
 }

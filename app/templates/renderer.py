@@ -147,6 +147,12 @@ def render_note(extraction: ClinicalExtraction, template: TemplateDefinition) ->
             value = _resolve_path(data, source)
             content_text = _format_value(sec.component, value)
 
+        is_empty = _is_empty(value)
+        # Dynamic template: skip sections with no grounded content so the note shows only
+        # what was actually discussed (no empty headings / "Not discussed" placeholders).
+        if is_empty and template.omit_empty_sections:
+            continue
+
         sections.append(
             NoteSection(
                 section_id=sec.id,
@@ -156,7 +162,7 @@ def render_note(extraction: ClinicalExtraction, template: TemplateDefinition) ->
                 content_text=content_text,
                 content_data=value,
                 provenance=_section_provenance(extraction, sec),
-                empty=_is_empty(value),
+                empty=is_empty,
             )
         )
 

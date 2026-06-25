@@ -15,6 +15,7 @@ interface AppState {
   stage: string;
   streaming: boolean;
   recording: boolean;
+  paused: boolean;
   busy: boolean;
   activeTab: string;
 
@@ -53,6 +54,7 @@ export const useStore = create<AppState>((set) => ({
   stage: '',
   streaming: false,
   recording: false,
+  paused: false,
   busy: false,
   activeTab: 'note',
 
@@ -74,7 +76,7 @@ export const useStore = create<AppState>((set) => ({
 
   set: (p) => set(p),
   resetSession: () => set({
-    sessionId: null, reviewState: null, stage: '', streaming: false, segments: [],
+    sessionId: null, reviewState: null, stage: '', streaming: false, paused: false, segments: [],
     liveNote: {}, liveNoteOrder: [], note: null, extraction: null, risk: null,
     grounding: null, raw: null, clean: null,
     confidenceBand: null, confidenceReasons: [], modeNotice: null, reviewSubmitted: false,

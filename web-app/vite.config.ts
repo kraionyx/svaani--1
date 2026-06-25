@@ -25,6 +25,16 @@ function adminDevRoute(): Plugin {
 export default defineConfig({
   plugins: [react(), adminDevRoute()],
   base: '/app/',
+  // Force a SINGLE React instance. Without dedupe, Vite's dep optimizer pre-bundled React
+  // twice (a standalone `react` chunk plus a copy inlined into the react-dom chunk). The two
+  // copies each have their own internal dispatcher, so a hook resolved from one while react-dom
+  // set the dispatcher on the other read `null` → "Cannot read properties of null (reading
+  // 'useState')" and crashed every authenticated load. dedupe + a pinned optimizeDeps entry
+  // keep React as one module across the whole graph.
+  resolve: { dedupe: ['react', 'react-dom'] },
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime'],
+  },
   build: { outDir: 'dist', emptyOutDir: true },
   server: {
     port: 5173,

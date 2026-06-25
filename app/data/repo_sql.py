@@ -99,9 +99,11 @@ class _SqliteStore:
 # ── Postgres / Supabase driver (lazy psycopg; not exercised without a live DB) ───
 class _PostgresStore:
     def __init__(self, dsn: str, pool_max: int = 4) -> None:
-        from psycopg_pool import ConnectionPool  # deferred — only this backend needs it
+        from app.data.pg_pool import make_pool  # deferred — only this backend needs it
 
-        self._pool = ConnectionPool(dsn, min_size=1, max_size=pool_max, open=True)
+        # Health-checked pool — the Supabase pooler drops idle connections; make_pool
+        # validates on checkout so reads/writes never crash on a stale connection.
+        self._pool = make_pool(dsn, min_size=1, max_size=pool_max, open=True)
         with self._pool.connection() as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS op_records "
@@ -109,22 +111,26 @@ class _PostgresStore:
             )
 
     def upsert(self, kind: str, rid: str, payload: str) -> None:
-        with self._pool.connection() as conn:
-            conn.execute(
-                "INSERT INTO op_records(kind, rid, payload) VALUES(%s,%s,%s) "
-                "ON CONFLICT(kind, rid) DO UPDATE SET payload=excluded.payload",
-                (kind, rid, payload),
-            )
+        from app.data.pg_pool import run
+
+        run(self._pool, lambda conn: conn.execute(
+            "INSERT INTO op_records(kind, rid, payload) VALUES(%s,%s,%s) "
+            "ON CONFLICT(kind, rid) DO UPDATE SET payload=excluded.payload",
+            (kind, rid, payload),
+        ))
 
     def all(self, kind: str) -> list[tuple[str, str]]:
-        with self._pool.connection() as conn:
-            return list(conn.execute(
-                "SELECT rid, payload FROM op_records WHERE kind=%s ORDER BY rid", (kind,)
-            ).fetchall())
+        from app.data.pg_pool import run
+
+        return run(self._pool, lambda conn: list(conn.execute(
+            "SELECT rid, payload FROM op_records WHERE kind=%s ORDER BY rid", (kind,)
+        ).fetchall()))
 
     def delete(self, kind: str, rid: str) -> None:
-        with self._pool.connection() as conn:
-            conn.execute("DELETE FROM op_records WHERE kind=%s AND rid=%s", (kind, rid))
+        from app.data.pg_pool import run
+
+        run(self._pool, lambda conn: conn.execute(
+            "DELETE FROM op_records WHERE kind=%s AND rid=%s", (kind, rid)))
 
     def close(self) -> None:
         try:

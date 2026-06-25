@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface Props {
-  recording: boolean; busy: boolean; streaming: boolean; stage: string;
+  recording: boolean; paused: boolean; busy: boolean; streaming: boolean; stage: string;
   templates: { template_id: string; name: string }[]; templateId: string;
   onTemplate: (t: string) => void;
   onRecord: () => void; onSimulate: () => void; onUpload: (f: File) => void;
+  onPause: () => void; onCancel: () => void;
   analyser: AnalyserNode | null;
   modeChoice: 'realtime' | 'batch' | 'auto' | 'hybrid';
   onModeChoice: (v: 'realtime' | 'batch' | 'auto' | 'hybrid') => void;
@@ -24,9 +25,25 @@ const MODE_HINT: Record<ModeId, string> = {
   auto: 'AI decides — keeps the live draft for simple consults, sharpens only when complex.',
 };
 
+function fmtTime(s: number) {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
 export function Recorder(p: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (!p.recording) { setElapsed(0); return; }
+    if (p.paused) return;
+    timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [p.recording, p.paused]);
 
   useEffect(() => {
     const cv = canvasRef.current!; const ctx = cv.getContext('2d')!;
@@ -96,7 +113,9 @@ export function Recorder(p: Props) {
       <div className={`mic-wrap ${p.recording ? 'live' : ''}`}>
         <canvas ref={canvasRef} className="mic-canvas" />
         <div className="mic-status">
-          {p.recording ? <b>Listening… {p.streaming ? '(streaming live)' : ''}</b>
+          {p.recording ? (p.paused
+            ? <b style={{ color: 'var(--warn, #e0a500)' }}>Paused — {fmtTime(elapsed)}</b>
+            : <b>Listening… {p.streaming ? '(streaming live)' : ''} <span style={{ fontVariantNumeric: 'tabular-nums', marginLeft: 6 }}>{fmtTime(elapsed)}</span></b>)
             : p.busy ? <b>{p.stage || 'Processing'}…</b>
               : 'Ready — press record to start.'}
         </div>
@@ -122,11 +141,22 @@ export function Recorder(p: Props) {
         {p.recording ? '■ Stop & finalize' : '● Record consultation'}
       </button>
 
+      {p.recording && (
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="btn ghost sm" onClick={p.onPause} style={{ flex: 1 }}>
+            {p.paused ? '▶ Resume' : '❚❚ Pause'}
+          </button>
+          <button className="btn ghost sm danger" onClick={p.onCancel} style={{ flex: 1 }}>
+            ✕ Cancel
+          </button>
+        </div>
+      )}
+
       <div className="row">
         <input ref={fileRef} type="file" accept="audio/*" style={{ display: 'none' }}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) p.onUpload(f); e.currentTarget.value = ''; }} />
-        <button className="btn ghost sm" disabled={p.busy} onClick={() => fileRef.current?.click()}>Upload audio</button>
-        <button className="btn ghost sm" disabled={p.busy} onClick={p.onSimulate}>▶ Simulate</button>
+        <button className="btn ghost sm" disabled={p.busy || p.recording} onClick={() => fileRef.current?.click()}>Upload audio</button>
+        <button className="btn ghost sm" disabled={p.busy || p.recording} onClick={p.onSimulate}>▶ Simulate</button>
       </div>
       <p className="hint">Record uses real-time streaming STT; on stop, the consult is diarized and the note streams in.</p>
     </div>

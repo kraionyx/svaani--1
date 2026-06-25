@@ -25,6 +25,24 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Identities that are NOT real clinicians and must never be counted/ranked as doctors:
+# the unauthenticated fallback and the dev header-auth scaffold ids. In jwt (production)
+# mode a real doctor is the Supabase auth UUID, which is never in this set.
+_NON_DOCTOR_IDS = {"", "anonymous", "doc", "dev-doctor", "scribe", "admin", "auditor"}
+# A real doctor is an identity with genuine CLINICAL activity — not merely one that sent an
+# HTTP request. Requiring sessions/AI/reports > 0 (on top of excluding the infra/dev ids)
+# generically drops request-only phantoms like "adm"/"dashboard" without hardcoding them.
+_REAL_DOCTOR_SQL = (
+    "user_id IS NOT NULL"
+    " AND user_id NOT IN ('anonymous','doc','dev-doctor','scribe','admin','auditor')"
+    " AND (total_sessions > 0 OR total_ai_calls > 0 OR total_reports > 0)"
+)
+
+
+def _is_real_doctor(user_id: str | None) -> bool:
+    return bool(user_id) and user_id not in _NON_DOCTOR_IDS
+
+
 def estimate_cost(prompt_tokens: int | None, completion_tokens: int | None) -> float | None:
     if prompt_tokens is None and completion_tokens is None:
         return None
@@ -64,6 +82,10 @@ class _Noop:
                      source: str = "", from_dt: str = "", to_dt: str = "") -> dict:
         return {"errors": [], "total": 0, "error": self._ERR}
 
+    def query_error_groups(self, *, limit: int = 50, severity: str = "",
+                           source: str = "", from_dt: str = "", to_dt: str = "") -> dict:
+        return {"groups": [], "total": 0, "error": self._ERR}
+
     def query_ai_analytics(self, *, from_dt: str = "", to_dt: str = "") -> dict:
         return {"summary": {}, "by_agent": [], "by_model": [], "recent_calls": [], "error": self._ERR}
 
@@ -88,11 +110,13 @@ class SupabaseLoggingService:
     _STOP = object()  # sentinel: tells the worker to drain and exit
 
     def __init__(self, db_url: str, pool_max: int = 4) -> None:
-        from psycopg_pool import ConnectionPool
+        from app.data.pg_pool import make_pool
 
-        # timeout caps how long a write waits for a free connection — without it, pool
-        # exhaustion would deadlock the worker thread indefinitely.
-        self._pool = ConnectionPool(db_url, min_size=1, max_size=pool_max, open=True, timeout=10.0)
+        # Health-checked pool: Supabase's pooler drops idle connections, so without
+        # check/max_idle a write or read would crash on a dead connection
+        # (OperationalError: server closed the connection). timeout caps how long a write
+        # waits for a free connection — without it, pool exhaustion would deadlock the worker.
+        self._pool = make_pool(db_url, min_size=1, max_size=pool_max, open=True, timeout=10.0)
         self._queue: queue.Queue = queue.Queue(maxsize=self._QUEUE_MAXSIZE)
         self._agent_queue: queue.Queue = queue.Queue(maxsize=self._QUEUE_MAXSIZE)
         self._dropped = 0          # writes discarded because the queue was full
@@ -240,8 +264,12 @@ class SupabaseLoggingService:
                     metadata: dict | None = None) -> None:
         self._enqueue(self._write_request, request_id, user_id, method, endpoint,
                       status_code, duration_ms, success, metadata or {})
-        if success:
-            self._enqueue(self._bump_doctor_requests, user_id)
+        # NOTE: we deliberately do NOT create/update a doctor_analytics row per request.
+        # Counting every HTTP identity as a "doctor" was the phantom-doctor source (an
+        # X-User-Id header of "adm"/"dashboard", or the "anonymous" fallback, became a
+        # top-ranked doctor with thousands of "requests"). Doctor rows are now only written
+        # on genuine clinical events: session create / finalize (update_doctor) and AI usage
+        # (_bump_doctor_ai). Per-doctor request counts, when needed, come from app_logs.
 
     def log_error(self, *, request_id: str | None = None, user_id: str | None = None,
                   endpoint: str | None = None, error_type: str, error_message: str,
@@ -377,10 +405,10 @@ class SupabaseLoggingService:
         with self._pool.connection() as conn:
             active_24h = conn.execute(
                 "SELECT COUNT(*) FROM doctor_analytics"
-                " WHERE last_active > now() - interval '24 hours'").fetchone()[0]
+                f" WHERE last_active > now() - interval '24 hours' AND {_REAL_DOCTOR_SQL}").fetchone()[0]
             totals = conn.execute(
                 "SELECT COALESCE(SUM(total_sessions),0), COALESCE(SUM(total_reports),0)"
-                " FROM doctor_analytics").fetchone()
+                f" FROM doctor_analytics WHERE {_REAL_DOCTOR_SQL}").fetchone()
             req = conn.execute(
                 "SELECT COUNT(*), COALESCE(AVG(duration_ms),0)::int,"
                 " SUM(CASE WHEN NOT success THEN 1 ELSE 0 END)"
@@ -390,7 +418,8 @@ class SupabaseLoggingService:
                 " FROM ai_analytics WHERE created_at > now() - interval '24 hours'").fetchone()
             top_docs = conn.execute(
                 "SELECT user_id, full_name, total_sessions, total_requests, last_active"
-                " FROM doctor_analytics ORDER BY total_sessions DESC, total_requests DESC"
+                f" FROM doctor_analytics WHERE {_REAL_DOCTOR_SQL}"
+                " ORDER BY total_sessions DESC, total_requests DESC"
                 " LIMIT 5").fetchall()
             recent_err = conn.execute(
                 "SELECT created_at, error_type, error_message, source, severity"
@@ -421,8 +450,13 @@ class SupabaseLoggingService:
     def query_doctors(self, page: int = 1, limit: int = 20, search: str = "") -> dict:
         offset = (page - 1) * limit
         with self._pool.connection() as conn:
-            where = "WHERE user_id ILIKE %s OR full_name ILIKE %s OR email ILIKE %s" if search else ""
-            params_search = [f"%{search}%"] * 3 if search else []
+            # Always exclude infra/dev identities; AND the search on top when present.
+            if search:
+                where = f"WHERE {_REAL_DOCTOR_SQL} AND (user_id ILIKE %s OR full_name ILIKE %s OR email ILIKE %s)"
+                params_search = [f"%{search}%"] * 3
+            else:
+                where = f"WHERE {_REAL_DOCTOR_SQL}"
+                params_search = []
             total = conn.execute(
                 f"SELECT COUNT(*) FROM doctor_analytics {where}",
                 params_search).fetchone()[0]
@@ -510,6 +544,48 @@ class SupabaseLoggingService:
             "ai_analysis": r[11],
         } for r in rows]
         return {"errors": errors, "total": total, "page": page, "limit": limit}
+
+    def query_error_groups(self, *, limit: int = 50, severity: str = "",
+                            source: str = "", from_dt: str = "", to_dt: str = "") -> dict:
+        """Distinct error signatures with occurrence counts — the debuggable view.
+
+        Groups by (type, source, severity, message prefix) so a repeated failure collapses
+        into ONE row showing how many times it happened and when it first/last occurred,
+        instead of flooding the timeline. Carries the most-recent stack trace + agent
+        analysis as a representative sample so a group is still actionable.
+        """
+        clauses, params = [], []
+        if severity:
+            clauses.append("severity = %s"); params.append(severity)
+        if source:
+            clauses.append("source = %s"); params.append(source)
+        if from_dt:
+            clauses.append("created_at >= %s"); params.append(from_dt)
+        if to_dt:
+            clauses.append("created_at <= %s"); params.append(to_dt)
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                f"SELECT error_type, source, severity, LEFT(error_message, 120) AS sig,"
+                f" COUNT(*) AS n, MIN(created_at) AS first_seen, MAX(created_at) AS last_seen,"
+                f" (array_agg(stack_trace ORDER BY created_at DESC)"
+                f"    FILTER (WHERE stack_trace IS NOT NULL))[1] AS sample_stack,"
+                f" (array_agg(ai_analysis ORDER BY created_at DESC)"
+                f"    FILTER (WHERE ai_analysis IS NOT NULL))[1] AS sample_ai,"
+                f" (array_agg(endpoint ORDER BY created_at DESC)"
+                f"    FILTER (WHERE endpoint IS NOT NULL))[1] AS sample_endpoint,"
+                f" MAX(id) AS sample_id"
+                f" FROM error_logs {where}"
+                f" GROUP BY error_type, source, severity, LEFT(error_message, 120)"
+                f" ORDER BY COUNT(*) DESC, MAX(created_at) DESC LIMIT %s",
+                params + [limit]).fetchall()
+        groups = [{
+            "error_type": r[0], "source": r[1], "severity": r[2], "message": r[3],
+            "count": r[4], "first_seen": str(r[5]), "last_seen": str(r[6]),
+            "sample_stack": r[7], "sample_ai": r[8], "sample_endpoint": r[9],
+            "sample_id": r[10],
+        } for r in rows]
+        return {"groups": groups, "total": len(groups)}
 
     def query_ai_analytics(self, *, from_dt: str = "", to_dt: str = "") -> dict:
         clauses, params = [], []

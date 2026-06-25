@@ -1,0 +1,23 @@
+{
+  "template_id": "dynamic_clinical",
+  "name": "Dynamic Clinical Note (auto-sections)",
+  "version": 1,
+  "hospital_id": null,
+  "description": "A dynamic consultation note that includes ONLY the sections for which the conversation actually contained relevant information — empty headings are omitted entirely (no 'Not discussed' / 'N/A' placeholders). Sections follow standard clinical order. Medications discussed remain non-authoritative and appear under the Prescription tab, never as an AI-authored drug chart.",
+  "omit_empty_sections": true,
+  "sections": [
+    { "id": "chief_complaint", "component": "CHIEF_COMPLAINTS", "label": "Chief Complaint", "enabled": true, "order": 1 },
+    { "id": "hpi", "component": "HISTORY_OF_PRESENT_ILLNESS", "label": "History of Present Illness", "enabled": true, "order": 2 },
+    { "id": "pmh", "component": "PAST_MEDICAL_HISTORY", "label": "Past Medical History", "enabled": true, "order": 3 },
+    { "id": "allergies", "component": "ALLERGIES", "label": "Allergy History", "enabled": true, "order": 4 },
+    { "id": "family_history", "component": "FAMILY_HISTORY", "label": "Family History", "enabled": true, "order": 5 },
+    { "id": "vitals", "component": "VITALS", "label": "Vital Signs", "enabled": true, "order": 6 },
+    { "id": "examination", "component": "EXAMINATION", "label": "Physical Examination", "enabled": true, "order": 7 },
+    { "id": "investigations", "component": "INVESTIGATIONS", "label": "Laboratory / Imaging Data", "enabled": true, "order": 8 },
+    { "id": "assessment", "component": "ASSESSMENT", "label": "Clinical Assessment", "enabled": true, "order": 9 },
+    { "id": "diagnosis", "component": "DIAGNOSIS", "label": "Differential Diagnosis", "enabled": true, "order": 10 },
+    { "id": "treatment_plan", "component": "TREATMENT_PLAN", "label": "Treatment Plan", "enabled": true, "order": 11 },
+    { "id": "follow_up", "component": "FOLLOW_UP", "label": "Follow-up Instructions", "enabled": true, "order": 12 },
+    { "id": "counselling", "component": "DOCTOR_NOTES", "label": "Patient Counselling & Summary", "enabled": true, "order": 13 }
+  ]
+}

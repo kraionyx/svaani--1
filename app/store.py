@@ -27,6 +27,12 @@ class SessionStore:
     def set_result(self, session_id: str, result: PipelineResult) -> None:
         self._results[session_id] = result
 
+    def delete(self, session_id: str) -> None:
+        """Discard a session and any result (used when a consult is cancelled). Idempotent;
+        durable backends override to also remove the persisted row."""
+        self._sessions.pop(session_id, None)
+        self._results.pop(session_id, None)
+
     def get_result(self, session_id: str) -> PipelineResult | None:
         return self._results.get(session_id)
 

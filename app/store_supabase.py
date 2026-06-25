@@ -97,11 +97,14 @@ class SupabaseSessionStore(SessionStore):
                 "SCRIBE_STORE_BACKEND=supabase requires SCRIBE_SUPABASE_DB_URL "
                 "(the Supabase Postgres connection string; prefer the pooler endpoint)."
             )
-        from psycopg_pool import ConnectionPool  # deferred — only needed for this backend
+        from app.data.pg_pool import make_pool  # deferred — only needed for this backend
 
-        # Small pool: the demo instance caps connections; the pooler endpoint handles
-        # multiplexing. open=True validates the connection at startup (fail fast).
-        self._pool = ConnectionPool(
+        # Health-checked pool: the Supabase pooler drops idle connections, so a plain pool
+        # would hand out a dead one and crash a session write/read with
+        # OperationalError: server closed the connection. make_pool validates on checkout
+        # and retires idle/aged connections. Small pool: the demo instance caps connections;
+        # the pooler endpoint handles multiplexing. open=True fails fast at startup.
+        self._pool = make_pool(
             settings.supabase_db_url, min_size=1, max_size=settings.supabase_pool_max, open=True
         )
 
@@ -145,13 +148,16 @@ class SupabaseSessionStore(SessionStore):
         }
 
     def _save(self, session: ConsultationSession) -> None:
-        with self._pool.connection() as conn:
-            conn.execute(_UPSERT, self._row(session))
+        from app.data.pg_pool import run
+
+        row = self._row(session)
+        run(self._pool, lambda conn: conn.execute(_UPSERT, row))
 
     def _hydrate(self, session_id: str) -> bool:
         """Load a session (and its result) from Postgres into the cache. Returns hit/miss."""
-        with self._pool.connection() as conn:
-            row = conn.execute(_SELECT, {"session_id": session_id}).fetchone()
+        from app.data.pg_pool import run
+
+        row = run(self._pool, lambda conn: conn.execute(_SELECT, {"session_id": session_id}).fetchone())
         if not row:
             return False
         s_enc, r_enc = row
@@ -185,6 +191,17 @@ class SupabaseSessionStore(SessionStore):
 
     def persist(self, session: ConsultationSession) -> None:
         self._save(session)
+
+    def delete(self, session_id: str) -> None:
+        """Remove a cancelled consult from the cache and Postgres (no clinical record kept)."""
+        from app.data.pg_pool import run
+
+        super().delete(session_id)
+        try:
+            run(self._pool, lambda conn: conn.execute(
+                "delete from consultations where session_id = %(sid)s", {"sid": session_id}))
+        except Exception:  # noqa: BLE001 — cancellation cleanup is best-effort
+            logger.info("could not delete cancelled session %s from Supabase", session_id, exc_info=True)
 
     def list_for_practitioner(self, practitioner_id: str, limit: int = 100) -> list[dict]:
         """Query Postgres for one user's sessions (the cache only holds hydrated rows, so

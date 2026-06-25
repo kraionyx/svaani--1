@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     sarvam_mode: str = "codemix"
     sarvam_language_code: str = "unknown"      # 'unknown' → auto-detect input language
     sarvam_diarize: bool = True                # use Batch API for doctor/patient labels
-    sarvam_num_speakers: int = 3               # doctor + patient
+    sarvam_num_speakers: int | None = None     # None = auto-detect; set to an int to hint Sarvam
     sarvam_poll_interval_s: int = 1            # batch-job poll cadence; lower = less tail latency
     sarvam_batch_timeout_s: int = 600
     # Real-time streaming STT (WebSocket consult path). Streaming has no diarization, so
