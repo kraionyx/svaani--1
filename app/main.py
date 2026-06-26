@@ -177,7 +177,20 @@ _TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "docs" / "templates"
 if _WEB_DIR.exists():
     app.mount("/ui", StaticFiles(directory=str(_WEB_DIR), html=True), name="ui")
 if _WEBAPP_DIR.exists():
-    app.mount("/app", StaticFiles(directory=str(_WEBAPP_DIR), html=True), name="app")
+    # Serve immutable, content-hashed build assets directly. Everything else under /app is
+    # a client-side (React Router) route, so it falls back to index.html — see serve_spa().
+    # This MUST be registered before the /app/{full_path:path} catch-all below so that
+    # asset requests hit the static mount instead of the SPA shell.
+    app.mount("/app/assets", StaticFiles(directory=str(_WEBAPP_DIR / "assets")), name="app-assets")
+
+
+def _spa_index() -> FileResponse:
+    """Return the SPA shell (index.html), or 503 if the frontend hasn't been built."""
+    index = _WEBAPP_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=503, detail="SPA not built — run: cd web-app && npm run build")
+    # index.html itself must never be cached, so a new deploy's hashed assets are picked up.
+    return FileResponse(str(index), headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 @app.get("/", include_in_schema=False)
@@ -190,10 +203,22 @@ def root() -> RedirectResponse:
 @app.get("/admin1/", include_in_schema=False)
 def admin_ui() -> FileResponse:
     """Serve the SPA at /admin1 so the React path check renders AdminPage."""
-    index = _WEBAPP_DIR / "index.html"
-    if not index.exists():
-        raise HTTPException(status_code=503, detail="SPA not built — run: cd web-app && npm run build")
-    return FileResponse(str(index))
+    return _spa_index()
+
+
+@app.get("/app", include_in_schema=False)
+@app.get("/app/{full_path:path}", include_in_schema=False)
+def serve_spa(full_path: str = "") -> FileResponse:
+    """SPA history-fallback. Serve a real built file when one exists (favicon, manifest,
+    etc.); otherwise return index.html so the client-side router resolves the path. This
+    is what lets enterprise deep-links like /app/templates/new survive a hard reload
+    instead of 404ing. Path-traversal is blocked by confining matches to the dist root."""
+    if full_path:
+        candidate = (_WEBAPP_DIR / full_path).resolve()
+        webapp_root = _WEBAPP_DIR.resolve()
+        if candidate.is_file() and (candidate == webapp_root or webapp_root in candidate.parents):
+            return FileResponse(str(candidate))
+    return _spa_index()
 
 
 # ── Auth ───────────────────────────────────────────────────────────────────────

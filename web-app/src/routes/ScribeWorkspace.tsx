@@ -1,29 +1,27 @@
+// The live consultation console — extracted verbatim from the former monolithic App.tsx
+// when routing was introduced. The app chrome (top bar, sidebar, breadcrumbs, theme studio,
+// toasts) now lives in AppLayout; this route owns only the consult workspace + its logic.
 import { useEffect, useRef, useState } from 'react';
-import * as API from './api';
-import { useAuth } from './auth';
-import { useStore } from './store';
-import { onToast, toast } from './toast';
-import { ConsultSocket } from './ws';
-import { startMic, micSupported, type MicHandle } from './audio';
-import { Recorder } from './components/Recorder';
-import { Tabs } from './components/Tabs';
-import { NoteView } from './components/NoteView';
-import { RiskPanel } from './components/RiskPanel';
-import { ExtractionEditor } from './components/ExtractionEditor';
-import { GroundingPanel } from './components/GroundingPanel';
-import { TranscriptView } from './components/TranscriptView';
-import { SignOff } from './components/SignOff';
-import { ConfidenceChip } from './components/ConfidenceChip';
-import { NoticeBanner } from './components/NoticeBanner';
-import { SpeakerTimeline } from './components/SpeakerTimeline';
-import { ReviewPrompt } from './components/ReviewPrompt';
-import { PrescriptionPreview } from './components/PrescriptionPreview';
-import { AdminDashboard } from './components/AdminDashboard';
-import { ThemeStudio } from './components/ThemeStudio';
-import { applyCustom, clearCustomInline, loadCustom } from './theme';
-import { ThreeScene } from './components/ThreeScene';
-
-const THEMES = ['mint', 'white', 'dark', 'custom'];
+import * as API from '../api';
+import { useAuth } from '../auth';
+import { useStore } from '../store';
+import { toast } from '../toast';
+import { ConsultSocket } from '../ws';
+import { startMic, micSupported, type MicHandle } from '../audio';
+import { Recorder } from '../components/Recorder';
+import { Tabs } from '../components/Tabs';
+import { NoteView } from '../components/NoteView';
+import { RiskPanel } from '../components/RiskPanel';
+import { ExtractionEditor } from '../components/ExtractionEditor';
+import { GroundingPanel } from '../components/GroundingPanel';
+import { TranscriptView } from '../components/TranscriptView';
+import { SignOff } from '../components/SignOff';
+import { NoticeBanner } from '../components/NoticeBanner';
+import { SpeakerTimeline } from '../components/SpeakerTimeline';
+import { ReviewPrompt } from '../components/ReviewPrompt';
+import { PrescriptionPreview } from '../components/PrescriptionPreview';
+import { AdminDashboard } from '../components/AdminDashboard';
+import { ThreeScene } from '../components/ThreeScene';
 
 function formatSessionDate(isoString?: string | null) {
   if (!isoString) return '';
@@ -34,27 +32,18 @@ function formatSessionDate(isoString?: string | null) {
   return `${datePart}, ${timePart}`;
 }
 
-export function App() {
+export function ScribeWorkspace() {
   const s = useStore();
-  const { session, signOut } = useAuth();
-  const [toastMsg, setToastMsg] = useState<{ m: string; e: boolean } | null>(null);
+  const { session } = useAuth();
   const sockRef = useRef<ConsultSocket | null>(null);
   const micRef = useRef<MicHandle | null>(null);
   const [signOpen, setSignOpen] = useState(false);
-  const [studioOpen, setStudioOpen] = useState(false);
   const [history, setHistory] = useState<API.SessionSummary[]>([]);
   const [filterQuery, setFilterQuery] = useState('');
 
   const loadHistory = () => { API.listSessions().then(setHistory).catch(() => { }); };
 
   useEffect(() => {
-    onToast((m, e) => { setToastMsg({ m, e }); setTimeout(() => setToastMsg(null), e ? 6500 : 3000); });
-    API.getHealth().then((h) => s.set({ health: h })).catch(() => toast('backend unreachable on :8000', true));
-    API.listTemplates().then((t) => {
-      s.set({ templates: t });
-      if (t.find((x) => x.template_id === 'ent')) s.set({ templateId: 'ent' });
-      else if (t[0]) s.set({ templateId: t[0].template_id });
-    }).catch(() => { });
     loadHistory();
   }, []);
 
@@ -67,14 +56,6 @@ export function App() {
       await loadOutputs(sid);
     } catch (e: any) { toast(e.message || 'could not open consultation', true); }
   }
-
-  const setTheme = (t: string) => {
-    document.documentElement.dataset.theme = t;
-    localStorage.setItem('svaani-theme', t);
-    if (t === 'custom') { applyCustom(loadCustom()); setStudioOpen(true); }
-    else { clearCustomInline(); setStudioOpen(false); }
-    s.set({} as any);
-  };
 
   async function loadOutputs(sid: string) {
     const [note, risk, extraction, raw, clean] = await Promise.all(
@@ -194,43 +175,7 @@ export function App() {
   };
 
   return (
-    <div className="shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="logo">𝓢</span>
-          <div className="brand-id">
-            <b>Svaani<span className="dot">.</span></b>
-            <span className="sub">AI Medical Scribe — a faithful scribe, never prescribes</span>
-          </div>
-          <svg className="ekg" viewBox="0 0 132 24" aria-hidden="true" focusable="false">
-            <path d="M0 12 H46 l3.5 -8 l4.5 16 l4 -13 l3 5 H78 l3.5 -10 l4.5 18 l3 -8 H132" />
-          </svg>
-        </div>
-        <div className="topctrls">
-          <span className={`pill ${s.health?.sarvam === 'live' ? 'live' : 'mock'}`}><span className="d" />STT: {s.health?.sarvam || '…'}</span>
-          <span className={`pill ${s.health?.vertex === 'live' ? 'live' : 'mock'}`}><span className="d" />LLM: {s.health?.vertex || '…'}</span>
-          {s.confidenceBand && (
-            <ConfidenceChip band={s.confidenceBand} reasons={s.confidenceReasons} />
-          )}
-          {!session && (
-            <label className="ctrl">role
-              <select value={s.role} onChange={(e) => { s.set({ role: e.target.value }); API.setRole(e.target.value); }}>
-                <option value="doctor">doctor</option><option value="scribe">scribe</option><option value="admin">admin</option>
-              </select>
-            </label>
-          )}
-          <div className="seg-theme">{THEMES.map((t) => <button key={t} className={document.documentElement.dataset.theme === t ? 'active' : ''} onClick={() => setTheme(t)}>{t[0].toUpperCase() + t.slice(1)}</button>)}</div>
-          {session && (
-            <span className="ctrl" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span title={session.user.email || ''} style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
-                {session.user.email}
-              </span>
-              <button onClick={() => signOut()}>Sign out</button>
-            </span>
-          )}
-        </div>
-      </header>
-
+    <>
       <NoticeBanner notice={s.modeNotice} onDismiss={() => s.set({ modeNotice: null })} />
 
       <main className="grid">
@@ -321,9 +266,6 @@ export function App() {
           )}
         </section>
       </main>
-
-      {studioOpen && <ThemeStudio onClose={() => setStudioOpen(false)} />}
-      {toastMsg && <div className={`toast ${toastMsg.e ? 'err' : ''}`}>{toastMsg.m}</div>}
-    </div>
+    </>
   );
 }

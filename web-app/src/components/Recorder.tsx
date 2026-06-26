@@ -45,62 +45,80 @@ export function Recorder(p: Props) {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [p.recording, p.paused]);
 
+  // Waveform: a *real* audio visualiser driven by the mic's time-domain data — NOT a
+  // canned animation. When silent the samples sit at ~128 so the line is flat; it only
+  // moves when there's actual sound. Idle (not recording) and Paused draw a static flat
+  // baseline with no animation loop at all, so the graphic never "flows" without audio.
   useEffect(() => {
-    const cv = canvasRef.current!; const ctx = cv.getContext('2d')!;
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
     let raf = 0;
-    const data = p.analyser ? new Uint8Array(p.analyser.frequencyBinCount) : null;
 
-    const draw = () => {
-      raf = requestAnimationFrame(draw);
-      const w = cv.width = cv.clientWidth || 280; const h = cv.height = 46;
-      ctx.clearRect(0, 0, w, h);
+    const isLive = p.recording && !p.paused && !!p.analyser;
+    const timeData = p.analyser ? new Uint8Array(p.analyser.fftSize) : null;
 
-      let intensity = 0.1; // Default breathing intensity
-      if (p.analyser && p.recording && data) {
-        p.analyser.getByteFrequencyData(data);
-        let sum = 0;
-        for (let i = 0; i < data.length; i++) {
-          sum += data[i];
-        }
-        intensity = (sum / data.length) / 128.0;
+    // Crisp on HiDPI; only resizes the backing store when the box actually changes.
+    const dims = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = cv.clientWidth || 280;
+      const h = cv.clientHeight || 48;
+      if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+        cv.width = Math.round(w * dpr);
+        cv.height = Math.round(h * dpr);
       }
-
-      const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#0fb9a6';
-      
-      const numWaves = 3;
-      const phases = [0, Math.PI / 3, Math.PI * 2 / 3];
-      const opacities = p.recording ? [0.8, 0.4, 0.2] : [0.35, 0.2, 0.1];
-      const speeds = p.recording ? [0.18, 0.12, 0.08] : [0.03, 0.02, 0.015];
-      const time = performance.now() * 0.01;
-
-      for (let wIndex = 0; wIndex < numWaves; wIndex++) {
-        ctx.beginPath();
-        ctx.strokeStyle = p.recording ? '#e74c3c' : accent;
-        ctx.lineWidth = wIndex === 0 ? 2 : 1;
-        ctx.globalAlpha = opacities[wIndex];
-
-        const phase = phases[wIndex] + time * speeds[wIndex];
-        const amplitude = (p.recording ? Math.max(5, intensity * 24) : 4) * (wIndex === 0 ? 1.0 : 0.6);
-
-        for (let x = 0; x < w; x++) {
-          const normalX = x / w;
-          const envelope = Math.sin(normalX * Math.PI);
-          const y = h / 2 + Math.sin(normalX * Math.PI * (p.recording ? 3.5 : 2.0) + phase) * amplitude * envelope;
-          
-          if (x === 0) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
-          }
-        }
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1.0;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { w, h };
     };
 
-    draw();
+    const accent = () => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#1ec7b1';
+    const RECORD_COLOR = '#e74c3c';
+
+    // Static baseline — no requestAnimationFrame, so it cannot animate without audio.
+    const drawFlat = () => {
+      const { w, h } = dims();
+      ctx.clearRect(0, 0, w, h);
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.globalAlpha = p.paused ? 0.55 : 0.3;
+      ctx.strokeStyle = p.paused ? RECORD_COLOR : accent();
+      ctx.beginPath();
+      ctx.moveTo(3, h / 2);
+      ctx.lineTo(w - 3, h / 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    };
+
+    // Live mic waveform from real samples — flat at silence, reactive when you speak.
+    const drawLive = () => {
+      raf = requestAnimationFrame(drawLive);
+      if (!p.analyser || !timeData) return;
+      const { w, h } = dims();
+      ctx.clearRect(0, 0, w, h);
+      p.analyser.getByteTimeDomainData(timeData);
+
+      const mid = h / 2;
+      const maxAmp = mid - 3;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = RECORD_COLOR;
+      ctx.globalAlpha = 0.95;
+      ctx.beginPath();
+      const step = timeData.length / w;
+      for (let x = 0; x < w; x++) {
+        const sample = (timeData[Math.floor(x * step)] - 128) / 128; // -1..1; 0 == silence
+        const envelope = Math.sin((x / w) * Math.PI);                 // taper at both ends
+        const y = mid + sample * maxAmp * envelope;
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    };
+
+    if (isLive) drawLive(); else drawFlat();
     return () => cancelAnimationFrame(raf);
-  }, [p.analyser, p.recording]);
+  }, [p.analyser, p.recording, p.paused]);
 
   return (
     <div className="card panel">

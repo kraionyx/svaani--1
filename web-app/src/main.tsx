@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { App } from './App';
+import { AppRouter } from './app/router';
 import { AdminPage } from './pages/AdminPage';
 import { LoginPage } from './pages/LoginPage';
 import { AuthProvider, useAuth } from './auth';
@@ -58,12 +58,12 @@ function Splash({ label = 'Loading…' }: { label?: string }) {
   );
 }
 
-// Inside the AuthProvider: render the app once authenticated, else the login page.
+// Inside the AuthProvider: render the routed app once authenticated, else the login page.
 function Gated() {
   const { session, loading } = useAuth();
   if (loading) return <Splash label="Signing you in…" />;
   if (!session) return <LoginPage />;
-  return <App />;
+  return <AppRouter />;
 }
 
 // Top-level: fetch the public auth config, then decide whether to gate behind login.
@@ -80,7 +80,7 @@ function Root() {
 
   if (isAdmin) return <AdminPage />;
   if (!cfg) return <Splash />;
-  if (!cfg.auth_required) return <App />;            // dev mode (SCRIBE_AUTH_MODE=dev): no login
+  if (!cfg.auth_required) return <AppRouter />;      // dev mode (SCRIBE_AUTH_MODE=dev): no login
   return (
     <AuthProvider>
       <Gated />

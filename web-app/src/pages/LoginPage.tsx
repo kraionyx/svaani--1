@@ -19,16 +19,28 @@ export function LoginPage() {
   const [cardTransform, setCardTransform] = useState('perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)');
 
   const [acceptedTerms, setAcceptedTerms] = useState(false);
-  const [termsScrolled, setTermsScrolled] = useState(false);
+  const [termsError, setTermsError] = useState(false);
+  const [shakeGoogle, setShakeGoogle] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
 
   const redirectTo = window.location.origin + window.location.pathname;
 
+  // Consent gate shared by both auth paths. Acceptance is driven ONLY by the checkbox;
+  // on failure we surface an inline, non-blocking error and replay the shake animation.
+  function ensureTermsAccepted(): boolean {
+    if (acceptedTerms) return true;
+    setTermsError(true);
+    setShakeGoogle(true);
+    return false;
+  }
+
+  function acceptTerms(checked: boolean) {
+    setAcceptedTerms(checked);
+    if (checked) { setTermsError(false); setShakeGoogle(false); }
+  }
+
   async function google() {
-    if (!acceptedTerms) {
-      setError("Please accept the Terms of Use & Privacy Notice to continue.");
-      return;
-    }
+    if (!ensureTermsAccepted()) return;
     setError(null); setBusy(true);
     const { error } = await getSupabase().auth.signInWithOAuth({
       provider: 'google',
@@ -39,10 +51,7 @@ export function LoginPage() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!acceptedTerms) {
-      setError("Please accept the Terms of Use & Privacy Notice to continue.");
-      return;
-    }
+    if (!ensureTermsAccepted()) return;
     setError(null); setInfo(null); setBusy(true);
     const sb = getSupabase();
     try {
@@ -101,7 +110,15 @@ export function LoginPage() {
 
         <h1 className="login-h1 login-card-pop">{mode === 'signin' ? 'Sign in to continue' : 'Create your account'}</h1>
 
-        <button type="button" className="login-btn-google login-card-pop" onClick={google} disabled={busy || !acceptedTerms}>
+        <button
+          type="button"
+          className={`login-btn-google login-card-pop${termsError ? ' invalid' : ''}${shakeGoogle ? ' shake' : ''}`}
+          onClick={google}
+          onAnimationEnd={() => setShakeGoogle(false)}
+          disabled={busy}
+          aria-invalid={termsError || undefined}
+          aria-describedby={termsError ? 'terms-error' : undefined}
+        >
           <GoogleIcon /> Continue with Google
         </button>
 
@@ -131,25 +148,25 @@ export function LoginPage() {
         )}
 
         <div className="login-terms-acceptance login-card-pop">
-          <label className={`login-checkbox-label ${!termsScrolled ? 'disabled' : ''} ${acceptedTerms ? 'checked' : ''}`}>
-            <input 
-              type="checkbox" 
-              disabled={!termsScrolled} 
+          <label className={`login-checkbox-label ${acceptedTerms ? 'checked' : ''} ${termsError ? 'invalid' : ''}`}>
+            <input
+              type="checkbox"
               checked={acceptedTerms}
-              onChange={(e) => setAcceptedTerms(e.target.checked)} 
+              aria-invalid={termsError || undefined}
+              onChange={(e) => acceptTerms(e.target.checked)}
             />
             <span>
               I agree to the <a className="login-link underline" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowTermsModal(true); }}>Terms &amp; Privacy Notice</a>
             </span>
           </label>
-          {!termsScrolled && (
-            <p className="login-terms-hint">
-              * Please open and scroll to the bottom of the <a className="login-link underline" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowTermsModal(true); }}>Terms &amp; Privacy Notice</a> to enable the checkbox.
+          {termsError && !acceptedTerms && (
+            <p className="login-terms-error" id="terms-error" role="alert">
+              You must accept the Terms &amp; Privacy Policy before continuing.
             </p>
           )}
         </div>
 
-        <button type="submit" className="login-btn-primary login-card-pop" disabled={busy || !acceptedTerms}>
+        <button type="submit" className="login-btn-primary login-card-pop" disabled={busy}>
           {busy ? 'Please wait…' : mode === 'signin' ? 'Sign in' : 'Create account'}
         </button>
 
@@ -173,15 +190,7 @@ export function LoginPage() {
               <h2>Terms of Use &amp; Privacy Notice</h2>
               <button className="login-terms-close" type="button" onClick={() => setShowTermsModal(false)}>&times;</button>
             </div>
-            <div 
-              className="login-terms-modal-body"
-              onScroll={(e) => {
-                const el = e.currentTarget;
-                if (el.scrollHeight - el.scrollTop <= el.clientHeight + 15) {
-                  setTermsScrolled(true);
-                }
-              }}
-            >
+            <div className="login-terms-modal-body">
               <h3>Svaani – Terms of Use &amp; Privacy Notice (Login Screen Version)</h3>
               <p className="login-terms-date">Last Updated: June 2026</p>
               <p>By logging into and using the Svaani platform ("Svaani", "we", "us"), you (the "User", "Doctor", or "Healthcare Provider") agree to the following terms:</p>
@@ -212,18 +221,14 @@ export function LoginPage() {
             
             <div className="login-terms-modal-footer">
               <span className="login-terms-scroll-warning">
-                {termsScrolled ? "✓ Terms fully read" : "Scroll to the bottom of the terms to accept"}
+                Reading this notice does not constitute acceptance — tick the consent box to agree.
               </span>
-              <button 
+              <button
                 type="button"
-                className={`login-btn-agree ${termsScrolled ? 'active' : ''}`}
-                disabled={!termsScrolled}
-                onClick={() => {
-                  setAcceptedTerms(true);
-                  setShowTermsModal(false);
-                }}
+                className="login-btn-agree active"
+                onClick={() => setShowTermsModal(false)}
               >
-                Agree &amp; Close
+                Close
               </button>
             </div>
           </div>
