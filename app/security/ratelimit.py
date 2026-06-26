@@ -40,8 +40,5 @@ class RateLimiter:
 
 
 def client_ip(request) -> str:
-    """Best-effort client IP, honouring a single proxy hop via X-Forwarded-For."""
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
+    """Client IP extraction. Ignores X-Forwarded-For by default to prevent trivial spoofing."""
     return request.client.host if request.client else "unknown"

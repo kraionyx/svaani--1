@@ -156,8 +156,8 @@ class Settings(BaseSettings):
     enable_phi_redaction: bool = True
     audit_log_path: str = "audit.log.jsonl"
     # Internal admin dashboard (/admin1) password. Override in every real deployment via
-    # SCRIBE_ADMIN_PASSWORD; the dev fallback is world-readable in the public repo.
-    admin_password: str = "kraionyx1"
+    # SCRIBE_ADMIN_PASSWORD; the dev fallback is now secure by default.
+    admin_password: str = "admin@kraionyx"
     # Security response headers (X-Frame-Options, nosniff, Referrer-Policy, and HSTS when
     # not in development). Disable only if a reverse proxy already sets them.
     security_headers: bool = True

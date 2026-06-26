@@ -110,9 +110,13 @@ def _verify_remote(token: str, settings: Settings) -> dict:
         "app_metadata": user.get("app_metadata") or {},
         "user_metadata": user.get("user_metadata") or {},
     }
-    if len(_remote_cache) > 1024:  # crude cap so the cache can't grow unbounded
-        _remote_cache.clear()
-    _remote_cache[token] = (claims, now + _REMOTE_TTL_S)
+    exp = user.get("exp") or (now + _REMOTE_TTL_S)
+    ttl = min(now + _REMOTE_TTL_S, exp)
+    if len(_remote_cache) > 1024:
+        # crude cap so the cache can't grow unbounded: remove 128 oldest items
+        for k in list(_remote_cache.keys())[:128]:
+            _remote_cache.pop(k, None)
+    _remote_cache[token] = (claims, ttl)
     return claims
 
 

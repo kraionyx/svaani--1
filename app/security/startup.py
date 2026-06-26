@@ -17,7 +17,7 @@ from app.security.crypto import get_cipher
 
 logger = logging.getLogger("svaani.startup")
 
-_DEFAULT_ADMIN_PASSWORD = "kraionyx1"
+_DEFAULT_ADMIN_PASSWORD = "admin@kraionyx"
 _DURABLE_BACKENDS = {"sqlite", "supabase"}
 
 
@@ -37,12 +37,15 @@ def collect_problems(settings: Settings) -> list[str]:
             "written as PLAINTEXT. Set a base64 32-byte key."
         )
 
-    # 2. Header auth (X-User-Id / X-Role) is unauthenticated — never in production.
     if settings.auth_mode != "jwt":
         problems.append(
             f"auth_mode={settings.auth_mode!r} trusts X-User-Id/X-Role headers without "
-            "verification. Set SCRIBE_AUTH_MODE=jwt and SCRIBE_JWT_JWKS_URL (or "
-            "SCRIBE_JWT_SECRET)."
+            "verification. Set SCRIBE_AUTH_MODE=jwt."
+        )
+    elif not (settings.jwt_secret or settings.jwt_jwks_url):
+        problems.append(
+            "auth_mode='jwt' but no local signing material configured. "
+            "Set SCRIBE_JWT_SECRET or SCRIBE_JWT_JWKS_URL to verify tokens securely."
         )
 
     # 3. Default admin password is world-readable in the public repo.
@@ -57,6 +60,11 @@ def collect_problems(settings: Settings) -> list[str]:
         problems.append(
             "cors_allow_origins only contains localhost — set SCRIBE_CORS_ALLOW_ORIGINS "
             "to your real frontend origin(s)."
+        )
+
+    if settings.debug:
+        problems.append(
+            "debug is True — this exposes full tracebacks to clients. Set SCRIBE_DEBUG=False."
         )
 
     return problems

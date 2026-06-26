@@ -20,12 +20,17 @@ from app.main import app
 
 client = TestClient(app)
 
-_GOOD_PW = "kraionyx1"  # dev default — matches SCRIBE_ADMIN_PASSWORD default
+_GOOD_PW = "admin@kraionyx"
 
+_cached_token = None
 
 def _token() -> dict:
-    """Return an X-Admin-Token header with the correct dev token."""
-    return {"X-Admin-Token": _GOOD_PW}
+    """Return an X-Admin-Token header with a valid admin JWT."""
+    global _cached_token
+    if not _cached_token:
+        r = client.post("/admin1/api/auth", json={"password": _GOOD_PW})
+        _cached_token = r.json()["token"]
+    return {"X-Admin-Token": _cached_token}
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +71,8 @@ def test_auth_correct_password_returns_token():
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is True
-    assert data["token"] == _GOOD_PW
+    assert isinstance(data["token"], str)
+    assert len(data["token"]) > 32
 
 
 def test_protected_endpoint_without_token_returns_401():
@@ -92,8 +98,8 @@ def test_auth_rate_limiting():
     assert r.status_code == 429
 
 
-def test_successful_auth_resets_rate_limiter():
-    """A correct password clears the counter so the user can try again cleanly."""
+def test_successful_auth_does_not_reset_rate_limiter():
+    """A correct password no longer clears the counter to prevent sustained brute force."""
     _auth_limiter._hits.clear()
     limit = _auth_limiter.max_hits
 
@@ -101,13 +107,13 @@ def test_successful_auth_resets_rate_limiter():
     for _ in range(limit - 1):
         client.post("/admin1/api/auth", json={"password": "wrong"})
 
-    # Correct password → success AND resets the counter.
+    # Correct password → success, but does NOT reset the counter.
     r = client.post("/admin1/api/auth", json={"password": _GOOD_PW})
     assert r.json()["ok"] is True
 
-    # Should be allowed again immediately.
+    # Should NOT be allowed immediately (we no longer reset limit on success).
     r = client.post("/admin1/api/auth", json={"password": "wrong"})
-    assert r.status_code == 200  # not 429
+    assert r.status_code == 429
 
 
 # ── Observability endpoints (Noop — no Supabase) ──────────────────────────────

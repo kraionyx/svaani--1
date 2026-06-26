@@ -9,35 +9,57 @@ from app.pipeline.orchestrator import PipelineResult
 from app.schemas.session import ConsultationSession
 
 
+import threading
+
 class SessionStore:
-    def __init__(self) -> None:
+    def __init__(self, max_size: int = 1024) -> None:
         self._sessions: dict[str, ConsultationSession] = {}
         self._results: dict[str, PipelineResult] = {}
+        self._max_size = max_size
+        self._lock = threading.Lock()
 
     def create(self, session: ConsultationSession) -> ConsultationSession:
-        self._sessions[session.session_id] = session
+        with self._lock:
+            self._prune_if_needed()
+            self._sessions[session.session_id] = session
         return session
 
     def get(self, session_id: str) -> ConsultationSession:
-        return self._sessions[session_id]
+        with self._lock:
+            return self._sessions[session_id]
 
     def exists(self, session_id: str) -> bool:
-        return session_id in self._sessions
+        with self._lock:
+            return session_id in self._sessions
 
     def set_result(self, session_id: str, result: PipelineResult) -> None:
-        self._results[session_id] = result
+        with self._lock:
+            self._prune_if_needed()
+            self._results[session_id] = result
+
+    def _prune_if_needed(self) -> None:
+        # Caller must hold _lock
+        if len(self._sessions) > self._max_size:
+            # Drop the oldest half
+            keys_to_drop = list(self._sessions.keys())[: self._max_size // 2]
+            for k in keys_to_drop:
+                self._sessions.pop(k, None)
+                self._results.pop(k, None)
 
     def delete(self, session_id: str) -> None:
         """Discard a session and any result (used when a consult is cancelled). Idempotent;
         durable backends override to also remove the persisted row."""
-        self._sessions.pop(session_id, None)
-        self._results.pop(session_id, None)
+        with self._lock:
+            self._sessions.pop(session_id, None)
+            self._results.pop(session_id, None)
 
     def get_result(self, session_id: str) -> PipelineResult | None:
-        return self._results.get(session_id)
+        with self._lock:
+            return self._results.get(session_id)
 
     def list(self) -> list[ConsultationSession]:
-        return list(self._sessions.values())
+        with self._lock:
+            return list(self._sessions.values())
 
     @staticmethod
     def _summary(s: ConsultationSession) -> dict:

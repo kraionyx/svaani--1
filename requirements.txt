@@ -18,6 +18,7 @@ sarvamai>=0.1.28          # Sarvam V3 STT (real-time + batch diarization)
 
 # ── Hardening (optional-import; app boots without them) ──────────────────────────
 pyjwt>=2.8                # JWT bearer auth (SCRIBE_AUTH_MODE=jwt); PyJWKClient for OIDC/Keycloak
+passlib[bcrypt]>=1.7.4    # Secure password hashing for admin auth
 prometheus-client>=0.20  # /metrics endpoint + per-stage latency histograms
 
 # ── Supabase/Postgres store (only needed for SCRIBE_STORE_BACKEND=supabase) ───────

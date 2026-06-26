@@ -103,6 +103,11 @@ async def run_pipeline(
     settings = settings or get_settings()
     llm = llm or get_llm(settings)
 
+    # Prevent resource exhaustion from abnormally long transcripts.
+    # A 200,000 char transcript is ~10 hours of fast talking.
+    if sum(len(s.text or "") for s in raw.segments) > 200_000:
+        raise ValueError("Transcript too long (exceeds 200,000 characters).")
+
     timings_ms: dict[str, int] = {}
     _t_total = time.perf_counter()
 
@@ -149,7 +154,7 @@ async def run_pipeline(
     timings_ms["note"] = int((time.perf_counter() - _t0) * 1000)
 
     _t0 = time.perf_counter()
-    risk = await asyncio.to_thread(assess_risk, clean, extraction, llm, settings, risk_markers)
+    risk = await asyncio.to_thread(assess_risk, clean, extraction, llm, settings, llm_markers=risk_markers)
     timings_ms["risk"] = int((time.perf_counter() - _t0) * 1000)
 
     timings_ms["total"] = int((time.perf_counter() - _t_total) * 1000)

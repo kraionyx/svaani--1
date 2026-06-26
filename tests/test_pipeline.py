@@ -10,14 +10,16 @@ from app.pipeline.orchestrator import run_pipeline
 from app.schemas.note import ConsultationNote
 from app.schemas.risk import RiskAssessment
 from app.stt.sarvam import MockSarvamSTT
+import pytest
 from app.templates.registry import get_registry
 
 
-def test_run_pipeline_produces_note_and_risk():
+@pytest.mark.asyncio
+async def test_run_pipeline_produces_note_and_risk():
     raw = MockSarvamSTT().transcribe(b"", session_id="smoke")  # canned ENT consult
     template = get_registry().get("soap")
 
-    result = run_pipeline(raw, template, llm=DisabledLLM())
+    result = await run_pipeline(raw, template, llm=DisabledLLM())
 
     assert isinstance(result.note, ConsultationNote)
     assert isinstance(result.risk, RiskAssessment)

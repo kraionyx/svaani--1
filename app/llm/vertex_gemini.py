@@ -41,12 +41,13 @@ class VertexGeminiLLM:
         self._types = types
         self.settings = settings
         if settings.vertex_api_key:
-            self.client = genai.Client(vertexai=True, api_key=settings.vertex_api_key)
+            self.client = genai.Client(vertexai=True, api_key=settings.vertex_api_key, http_options={"timeout": 30.0})
         else:
             self.client = genai.Client(
                 vertexai=True,
                 project=settings.vertex_project,
                 location=settings.vertex_location,
+                http_options={"timeout": 30.0}
             )
 
     @property

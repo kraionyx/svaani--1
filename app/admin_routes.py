@@ -23,6 +23,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import Optional
+from datetime import datetime, timedelta, timezone
+import jwt
 
 logger = logging.getLogger("svaani.admin")
 
@@ -41,14 +43,15 @@ router = APIRouter(prefix="/admin1/api", tags=["admin"])
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
-def _token_hash() -> str:
+def _admin_secret() -> str:
     return hashlib.sha256(get_settings().admin_password.encode()).hexdigest()
-
 
 def _require_admin(x_admin_token: Optional[str] = Header(default=None)) -> None:
     if not x_admin_token:
         raise HTTPException(status_code=401, detail="X-Admin-Token required")
-    if not hmac.compare_digest(hashlib.sha256(x_admin_token.encode()).hexdigest(), _token_hash()):
+    try:
+        jwt.decode(x_admin_token, _admin_secret(), algorithms=["HS256"])
+    except jwt.PyJWTError:
         raise HTTPException(status_code=403, detail="invalid admin token")
 
 
@@ -66,12 +69,18 @@ def admin_auth(req: AuthRequest, request: Request) -> dict:
     ip = client_ip(request)
     if not _auth_limiter.check(ip):
         raise HTTPException(status_code=429, detail="too many attempts — try again later")
-    if not hmac.compare_digest(
-        hashlib.sha256(req.password.encode()).hexdigest(), _token_hash()
-    ):
+    if not hmac.compare_digest(req.password.encode("utf-8"), get_settings().admin_password.encode("utf-8")):
         return {"ok": False}
-    _auth_limiter.reset(ip)
-    return {"ok": True, "token": req.password}
+    # Reset limit but only partially or just don't reset to prevent brute force
+    # We will simply not reset it, or we can leave it as is but it's safer to not reset entirely.
+    # _auth_limiter.reset(ip) -> removed to prevent reset on success
+    
+    payload = {
+        "sub": "admin",
+        "exp": datetime.now(timezone.utc) + timedelta(hours=24)
+    }
+    token = jwt.encode(payload, _admin_secret(), algorithm="HS256")
+    return {"ok": True, "token": token}
 
 
 # ── New observability metrics (Supabase logging tables) ──────────────────────

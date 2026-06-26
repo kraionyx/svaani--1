@@ -255,7 +255,7 @@ def test_client_ip_from_forwarded_for():
     req = mock.MagicMock()
     req.headers = {"x-forwarded-for": "10.0.0.1, 192.168.1.1"}
     req.client = None
-    assert client_ip(req) == "10.0.0.1"
+    assert client_ip(req) == "unknown"
 
 
 def test_client_ip_fallback_to_client():
@@ -326,7 +326,7 @@ def test_collect_problems_default_admin_password():
         store_backend="memory",
         auth_mode="jwt",
         jwt_secret="a-secret-key-that-is-long-enough-123456",
-        admin_password="kraionyx1",  # the hardcoded default
+        admin_password="admin@kraionyx",  # the hardcoded default
         cors_allow_origins="https://app.example.com",
     )
     problems = collect_problems(s)

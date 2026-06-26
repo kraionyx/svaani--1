@@ -81,7 +81,8 @@ def run_clinical_eval(
             case_timings: list[dict] = []
             for _ in range(max(1, repeat)):
                 raw = build_raw(case)  # fresh: run_pipeline mutates segment roles in place
-                result = run_pipeline(raw, template, llm=llm, settings=settings)
+                import asyncio
+                result = asyncio.run(run_pipeline(raw, template, llm=llm, settings=settings))
                 case_timings.append(result.timings_ms)
                 runs.append(score_case(case, result.extraction, result.profile))
             # LLMs are non-deterministic even at temp 0, so average the headline/overall

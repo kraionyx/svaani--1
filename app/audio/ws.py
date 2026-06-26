@@ -136,6 +136,12 @@ async def consultation_ws(
             # ── audio frame ──────────────────────────────────────────────────
             if message.get("bytes") is not None:
                 chunk = message["bytes"]
+                if len(chunk) > 1024 * 1024:
+                    await websocket.close(code=1009, reason="frame too large")
+                    break
+                if audio_size + len(chunk) > 50 * 1024 * 1024:
+                    await websocket.close(code=1009, reason="audio buffer too large")
+                    break
                 async with audio_lock:
                     audio_temp.write(chunk)
                     audio_size += len(chunk)

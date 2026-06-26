@@ -614,6 +614,10 @@ async def upload_audio(sid: str, file: UploadFile = File(...), principal: Princi
     import os
     import shutil
     
+    ALLOWED_TYPES = {"audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3", "audio/webm", "audio/ogg", "audio/x-m4a", "audio/mp4", "video/mp4"}
+    if file.content_type not in ALLOWED_TYPES and not file.filename.endswith((".wav", ".mp3", ".m4a", ".ogg", ".mp4", ".webm")):
+        raise HTTPException(status_code=415, detail=f"unsupported audio format: {file.content_type}")
+
     # Save the upload to disk in chunks to avoid blowing up RAM (0-copy processing)
     fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     audio_size = 0
