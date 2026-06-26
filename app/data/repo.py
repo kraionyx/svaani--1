@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.schemas.document import DocumentStatus, DocumentTemplate, RenderedDocument
+from app.schemas.template import TemplateDefinition
 from app.schemas.review import (
     IMPROVEMENT_ORDER,
     AdminReview,
@@ -54,11 +55,13 @@ class Repository:
         self.prompts: dict[str, PromptVersion] = {}
         self.models: dict[str, ModelVersion] = {}
         self.doc_templates: dict[str, DocumentTemplate] = {}
+        self.note_templates: dict[tuple[str, int], TemplateDefinition] = {}
         self.rendered_docs: dict[str, RenderedDocument] = {}
         self.edits: dict[str, list] = {}        # session_id -> [ConsultationEdit-like dict]
         self.flags: dict[str, dict] = {}        # key -> {enabled, value}
         self.ab_metrics: list[dict] = []        # prompt A/B outcome rows (Goal 13)
         self.stage_latencies: list[dict] = []    # per-stage timing rows (Goals 4/12/13)
+        self.audit_events: list[dict] = []      # audit log events
 
     def close(self) -> None:
         """Release backing resources. No-op for the in-memory repo; the persistent
@@ -192,6 +195,16 @@ class Repository:
             items = [r for r in items if r.get("stage") == stage]
         return items
 
+    # ── Audit Logs ──────────────────────────────────────────────────────────────
+    def record_audit_event(self, event: dict) -> dict:
+        with self._lock:
+            self.audit_events.append(event)
+            return event
+
+    def list_audit_events(self) -> list[dict]:
+        with self._lock:
+            return list(self.audit_events)
+
     # ── Goal 10: prompt/model versions ─────────────────────────────────────────
     def add_prompt_version(self, pv: PromptVersion) -> PromptVersion:
         with self._lock:
@@ -259,6 +272,16 @@ class Repository:
                 if d.doc_type == doc_type and d.active:
                     return d
         return None
+
+    # ── Note templates (TemplateDefinition) ────────────────────────────────────
+    def add_note_template(self, template: TemplateDefinition) -> TemplateDefinition:
+        with self._lock:
+            self.note_templates[(template.template_id, template.version)] = template
+            return template
+
+    def list_note_templates(self) -> list[TemplateDefinition]:
+        with self._lock:
+            return list(self.note_templates.values())
 
     def save_rendered_document(self, doc: RenderedDocument) -> RenderedDocument:
         with self._lock:

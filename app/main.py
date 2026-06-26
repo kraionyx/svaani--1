@@ -20,6 +20,7 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Resp
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.logging_config import request_id_ctx, setup_logging
 from app.security.startup import validate_production
@@ -109,6 +110,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(admin_router)
+
+class LimitUploadSize(BaseHTTPMiddleware):
+    def __init__(self, app, max_upload_size: int) -> None:
+        super().__init__(app)
+        self.max_upload_size = max_upload_size
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method in ("POST", "PUT", "PATCH"):
+            content_length = request.headers.get("content-length")
+            if content_length and int(content_length) > self.max_upload_size:
+                return JSONResponse(status_code=413, content={"detail": "Payload too large"})
+        return await call_next(request)
+
+app.add_middleware(LimitUploadSize, max_upload_size=50 * 1024 * 1024) # 50MB
 
 # The frontend is a standalone static app served on its own port (default :5173),
 # so cross-origin XHR/fetch and the custom auth headers must be allowed. Origins are
@@ -466,11 +481,6 @@ def create_template(template: TemplateDefinition, principal: Principal = Depends
 
     registry.register(template)
 
-    # Persist as pretty JSON alongside the seed templates.
-    _TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
-    path = _TEMPLATES_DIR / f"{template.template_id}.json"
-    path.write_text(json.dumps(template.model_dump(mode="json"), indent=2), encoding="utf-8")
-
     get_audit_log().record(AuditEvent(
         actor_id=principal.id, action="create_template", resource="template",
         detail=template.pinned_ref,
@@ -512,13 +522,13 @@ def list_my_sessions(principal: Principal = Depends(get_principal)) -> list[dict
     return get_store().list_for_practitioner(principal.id)
 
 
-def _process(session: ConsultationSession, raw: RawTranscript, principal: Principal) -> dict:
+async def _process(session: ConsultationSession, raw: RawTranscript, principal: Principal) -> dict:
     settings = get_settings()
     if session.state is ReviewState.LISTENING:
         session.transition(ReviewState.PROCESSING)
     template = get_registry().get(session.template_id)
     _t0 = time.perf_counter()
-    result = run_pipeline(raw, template, settings=settings)
+    result = await run_pipeline(raw, template, settings=settings)
     _pipeline_ms = int((time.perf_counter() - _t0) * 1000)
     session.raw_transcript = raw
     session.clean_transcript = result.clean
@@ -534,27 +544,33 @@ def _process(session: ConsultationSession, raw: RawTranscript, principal: Princi
     # Goal 10: stamp the active model + extraction-prompt version for rollback/audit.
     repo = get_repo()
     session.model_version = settings.gemini_model
-    _active_extract = repo.active_prompt("extract")
+    _active_extract = await asyncio.to_thread(repo.active_prompt, "extract")
     session.prompt_version = f"extract@{_active_extract.version}" if _active_extract else None
-    # Goals 4/12: record pipeline latency so the analytics tab can show p50/p95 by mode.
-    repo.record_stage_latency({
-        "stage": "pipeline", "session_id": session.session_id, "latency_ms": _pipeline_ms,
-        "inference_mode": session.inference_mode, "model_version": session.model_version,
-    })
-    # Per-stage breakdown (analyze / note / risk) so the latency tab can attribute the
-    # wall-clock to a stage instead of one opaque 'pipeline' number (the dominant cost is
-    # the LLM 'analyze' call). 'total' is omitted here — 'pipeline' already covers it.
-    for _stage, _ms in (result.timings_ms or {}).items():
-        if _stage == "total":
-            continue
+    
+    def _save_all():
+        # Goals 4/12: record pipeline latency so the analytics tab can show p50/p95 by mode.
         repo.record_stage_latency({
-            "stage": _stage, "session_id": session.session_id, "latency_ms": _ms,
+            "stage": "pipeline", "session_id": session.session_id, "latency_ms": _pipeline_ms,
             "inference_mode": session.inference_mode, "model_version": session.model_version,
         })
-    get_store().set_result(session.session_id, result)
-    if session.state is ReviewState.PROCESSING:
-        session.transition(ReviewState.DRAFT)
-    get_store().persist(session)
+        for _stage, _ms in (result.timings_ms or {}).items():
+            if _stage == "total":
+                continue
+            repo.record_stage_latency({
+                "stage": _stage, "session_id": session.session_id, "latency_ms": _ms,
+                "inference_mode": session.inference_mode, "model_version": session.model_version,
+            })
+        get_store().set_result(session.session_id, result)
+        if session.state is ReviewState.PROCESSING:
+            session.transition(ReviewState.DRAFT)
+        get_store().persist(session)
+        get_audit_log().record(AuditEvent(
+            actor_id=principal.id, action="process_pipeline", resource="session",
+            session_id=session.session_id, phi_accessed=True,
+        ))
+
+    await asyncio.to_thread(_save_all)
+
     # Upload transcript + note as .txt files to Supabase Storage (background, best-effort).
     upload_consultation_files(
         session_id=session.session_id,
@@ -562,10 +578,6 @@ def _process(session: ConsultationSession, raw: RawTranscript, principal: Princi
         note_markdown=result.note.to_markdown(),
         settings=settings,
     )
-    get_audit_log().record(AuditEvent(
-        actor_id=principal.id, action="process_pipeline", resource="session",
-        session_id=session.session_id, phi_accessed=True,
-    ))
     return {
         "session_id": session.session_id, "state": session.state.value,
         "risk_score": result.risk.score, "risk_markers": len(result.risk.markers),
@@ -577,20 +589,20 @@ def _process(session: ConsultationSession, raw: RawTranscript, principal: Princi
 
 
 @app.post("/sessions/{sid}/transcript")
-def submit_transcript(sid: str, raw: RawTranscript, principal: Principal = Depends(get_principal)) -> dict:
+async def submit_transcript(sid: str, raw: RawTranscript, principal: Principal = Depends(get_principal)) -> dict:
     _check(principal, Permission.VIEW_TRANSCRIPT)
     store, session = _load_session(sid, principal)
     raw.session_id = sid
-    return _process(session, raw, principal)
+    return await _process(session, raw, principal)
 
 
 @app.post("/sessions/{sid}/simulate")
-def simulate(sid: str, principal: Principal = Depends(get_principal)) -> dict:
+async def simulate(sid: str, principal: Principal = Depends(get_principal)) -> dict:
     """Run the pipeline on a canned consultation — smoke-test aid (always mock STT)."""
     _check(principal, Permission.VIEW_TRANSCRIPT)
     store, session = _load_session(sid, principal)
     raw = MockSarvamSTT().transcribe(b"", session_id=sid)
-    return _process(session, raw, principal)
+    return await _process(session, raw, principal)
 
 
 @app.post("/sessions/{sid}/audio")
@@ -598,18 +610,39 @@ async def upload_audio(sid: str, file: UploadFile = File(...), principal: Princi
     """Transcribe an uploaded recording via Sarvam V3 (batch-diarized → fallback) and run the pipeline."""
     _check(principal, Permission.VIEW_TRANSCRIPT)
     store, session = _load_session(sid, principal)
-    audio = await file.read()
-    logger.info("audio upload: session=%s bytes=%d content_type=%s", sid, len(audio), file.content_type)
-    if len(audio) < _MIN_AUDIO_BYTES:
-        raise HTTPException(status_code=422, detail="no audible speech captured")
+    import tempfile
+    import os
+    import shutil
+    
+    # Save the upload to disk in chunks to avoid blowing up RAM (0-copy processing)
+    fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+    audio_size = 0
     try:
-        # STT is a blocking SDK call — run it off the event loop.
-        raw = await asyncio.to_thread(
-            get_stt(get_settings()).transcribe_for_session, audio, session_id=sid
-        )
-    except Exception as exc:  # surface STT provider errors instead of a raw 500
-        logger.exception("STT failed for session %s", sid)
-        raise HTTPException(status_code=502, detail=f"transcription failed: {str(exc)[:400]}") from exc
+        with os.fdopen(fd, "wb") as f_out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                f_out.write(chunk)
+                audio_size += len(chunk)
+        
+        logger.info("audio upload: session=%s bytes=%d content_type=%s", sid, audio_size, file.content_type)
+        if audio_size < _MIN_AUDIO_BYTES:
+            raise HTTPException(status_code=422, detail="no audible speech captured")
+        
+        try:
+            # STT is a blocking SDK call — run it off the event loop.
+            raw = await asyncio.to_thread(
+                get_stt(get_settings()).transcribe_for_session, tmp_path, session_id=sid
+            )
+        except Exception as exc:  # surface STT provider errors instead of a raw 500
+            logger.exception("STT failed for session %s", sid)
+            raise HTTPException(status_code=502, detail=f"transcription failed: {str(exc)[:400]}") from exc
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
     total_chars = sum(len((s.text or "")) for s in raw.segments)
     logger.info("STT result: session=%s segments=%d total_text_chars=%d sample=%r",
                 sid, len(raw.segments), total_chars,
@@ -617,7 +650,7 @@ async def upload_audio(sid: str, file: UploadFile = File(...), principal: Princi
     if not _has_speech(raw):
         raise HTTPException(status_code=422, detail="no speech detected in audio")
     try:
-        return await asyncio.to_thread(_process, session, raw, principal)
+        return await _process(session, raw, principal)
     except Exception as exc:
         logger.exception("pipeline failed for session %s", sid)
         raise HTTPException(status_code=500, detail=f"processing failed: {str(exc)[:400]}") from exc
@@ -673,14 +706,14 @@ def get_coding_hints(sid: str, principal: Principal = Depends(get_principal)) ->
 
 
 @app.post("/sessions/{sid}/note")
-def edit_note(sid: str, req: NoteEditRequest, principal: Principal = Depends(get_principal)) -> dict:
+async def edit_note(sid: str, req: NoteEditRequest, principal: Principal = Depends(get_principal)) -> dict:
     """Save doctor edits to the generated note, then move the session to EDITED.
 
     Edits only the human-readable ``content_text`` of the named sections; the
     structured extraction and its provenance are left intact. Requires EDIT_NOTE.
     """
     _check(principal, Permission.EDIT_NOTE)
-    store, session = _load_session(sid, principal)
+    store, session = await asyncio.to_thread(_load_session, sid, principal)
     if session.note is None:
         raise HTTPException(status_code=409, detail="no note to edit yet")
 
@@ -695,16 +728,19 @@ def edit_note(sid: str, req: NoteEditRequest, principal: Principal = Depends(get
             section.empty = not section.content_text.strip()
 
     _advance_to_edited(session)
-    store.persist(session)
-    get_audit_log().record(AuditEvent(
-        actor_id=principal.id, action="edit_note", resource="note",
-        session_id=sid, phi_accessed=True, detail=",".join(sorted(edits)),
-    ))
+    
+    def _save():
+        store.persist(session)
+        get_audit_log().record(AuditEvent(
+            actor_id=principal.id, action="edit_note", resource="note",
+            session_id=sid, phi_accessed=True, detail=",".join(sorted(edits)),
+        ))
+    await asyncio.to_thread(_save)
     return {"session_id": sid, "state": session.state.value, "note": session.note.model_dump(mode="json")}
 
 
 @app.put("/sessions/{sid}/extraction")
-def edit_extraction(sid: str, req: ExtractionEditRequest, principal: Principal = Depends(get_principal)) -> dict:
+async def edit_extraction(sid: str, req: ExtractionEditRequest, principal: Principal = Depends(get_principal)) -> dict:
     """Save doctor edits to the clinical extraction, then re-derive the note + grounding.
 
     The doctor is the clinical authority: edited/added items are kept (grounded in flag
@@ -713,27 +749,34 @@ def edit_extraction(sid: str, req: ExtractionEditRequest, principal: Principal =
     Requires EDIT_NOTE.
     """
     _check(principal, Permission.EDIT_NOTE)
-    store, session = _load_session(sid, principal)
+    store, session = await asyncio.to_thread(_load_session, sid, principal)
     if session.extraction is None:
         raise HTTPException(status_code=409, detail="no extraction to edit yet")
 
     extraction = req.extraction
     extraction.session_id = sid
     template = get_registry().get(session.template_id)
-    result = rebuild_from_extraction(
-        extraction, template, session.clean_transcript,
-        session.risk or RiskAssessment(session_id=sid), get_settings(),
-        profile=session.conversation_profile,
-    )
+    
+    def _rebuild():
+        return rebuild_from_extraction(
+            extraction, template, session.clean_transcript,
+            session.risk or RiskAssessment(session_id=sid), get_settings(),
+            profile=session.conversation_profile,
+        )
+    result = await asyncio.to_thread(_rebuild)
+    
     session.extraction = result.extraction
     session.note = result.note
-    store.set_result(sid, result)
-    _advance_to_edited(session)
-    store.persist(session)
-    get_audit_log().record(AuditEvent(
-        actor_id=principal.id, action="edit_extraction", resource="extraction",
-        session_id=sid, phi_accessed=True,
-    ))
+    
+    def _save():
+        store.set_result(sid, result)
+        _advance_to_edited(session)
+        store.persist(session)
+        get_audit_log().record(AuditEvent(
+            actor_id=principal.id, action="edit_extraction", resource="extraction",
+            session_id=sid, phi_accessed=True,
+        ))
+    await asyncio.to_thread(_save)
     return {
         "session_id": sid, "state": session.state.value,
         "extraction": result.extraction.model_dump(mode="json"),
@@ -743,13 +786,13 @@ def edit_extraction(sid: str, req: ExtractionEditRequest, principal: Principal =
 
 
 @app.put("/sessions/{sid}/risk")
-def edit_risk(sid: str, req: RiskEditRequest, principal: Principal = Depends(get_principal)) -> dict:
+async def edit_risk(sid: str, req: RiskEditRequest, principal: Principal = Depends(get_principal)) -> dict:
     """Save doctor edits to the risk markers (add / remove / edit). Re-scores from the
     edited markers. Risk is a non-authoritative attention aid, so this never changes the
     note or extraction. Requires EDIT_NOTE.
     """
     _check(principal, Permission.EDIT_NOTE)
-    store, session = _load_session(sid, principal)
+    store, session = await asyncio.to_thread(_load_session, sid, principal)
     if session.risk is None:
         raise HTTPException(status_code=409, detail="no risk assessment to edit yet")
 
@@ -757,17 +800,20 @@ def edit_risk(sid: str, req: RiskEditRequest, principal: Principal = Depends(get
         session_id=sid, markers=req.markers, score=aggregate_score(req.markers),
     )
     _advance_to_edited(session)
-    store.persist(session)
-    get_audit_log().record(AuditEvent(
-        actor_id=principal.id, action="edit_risk", resource="risk",
-        session_id=sid, phi_accessed=True,
-    ))
+    
+    def _save():
+        store.persist(session)
+        get_audit_log().record(AuditEvent(
+            actor_id=principal.id, action="edit_risk", resource="risk",
+            session_id=sid, phi_accessed=True,
+        ))
+    await asyncio.to_thread(_save)
     return {"session_id": sid, "state": session.state.value, "risk": session.risk.model_dump(mode="json")}
 
 
 @app.post("/sessions/{sid}/state")
-def transition_state(sid: str, req: StateRequest, principal: Principal = Depends(get_principal)) -> dict:
-    store, session = _load_session(sid, principal)
+async def transition_state(sid: str, req: StateRequest, principal: Principal = Depends(get_principal)) -> dict:
+    store, session = await asyncio.to_thread(_load_session, sid, principal)
     perm = Permission.FINALIZE_NOTE if req.state is ReviewState.FINALIZED else (
         Permission.APPROVE_NOTE if req.state is ReviewState.APPROVED else Permission.EDIT_NOTE
     )
@@ -782,14 +828,19 @@ def transition_state(sid: str, req: StateRequest, principal: Principal = Depends
         session.signed_by_name = req.signed_by_name.strip()
         session.signature_image = req.signature_image
         session.signed_at = datetime.now(timezone.utc)
-        get_logging_service().update_doctor(
-            user_id=principal.id, increment_reports=1, feature="report_finalized"
-        )
-    store.persist(session)
-    get_audit_log().record(AuditEvent(
-        actor_id=principal.id, action="transition", resource="session",
-        session_id=sid, detail=req.state.value,
-    ))
+        def _update_doctor():
+            get_logging_service().update_doctor(
+                user_id=principal.id, increment_reports=1, feature="report_finalized"
+            )
+        await asyncio.to_thread(_update_doctor)
+        
+    def _save():
+        store.persist(session)
+        get_audit_log().record(AuditEvent(
+            actor_id=principal.id, action="transition", resource="session",
+            session_id=sid, detail=req.state.value,
+        ))
+    await asyncio.to_thread(_save)
     return {"session_id": sid, "state": session.state.value}
 
 

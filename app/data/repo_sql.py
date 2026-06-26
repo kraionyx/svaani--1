@@ -33,6 +33,7 @@ from app.schemas.review import (
     ModelVersion,
     PromptVersion,
 )
+from app.schemas.template import TemplateDefinition
 from app.security.crypto import get_cipher
 
 # kind -> (cache attribute, pydantic model). Edits and flags are handled specially.
@@ -44,6 +45,7 @@ _MODEL_KINDS: dict[str, type] = {
     "model": ModelVersion,
     "doc_template": DocumentTemplate,
     "rendered_doc": RenderedDocument,
+    "note_template": TemplateDefinition,
 }
 # Payloads that contain PHI and must be encrypted at rest.
 _PHI_KINDS = {"rendered_doc", "edit"}
@@ -188,7 +190,11 @@ def build_persistent_repository(store: _Store, settings: Settings):
             for kind, model in _MODEL_KINDS.items():
                 for rid, payload in self._store.all(kind):
                     try:
-                        caches[kind][rid] = model.model_validate_json(self._deser(kind, payload))
+                        obj = model.model_validate_json(self._deser(kind, payload))
+                        if kind == "note_template":
+                            self.note_templates[(obj.template_id, obj.version)] = obj
+                        else:
+                            caches[kind][rid] = obj
                     except Exception:  # noqa: BLE001 — skip a corrupt/incompatible row
                         continue
             for rid, payload in self._store.all("edit"):
@@ -202,16 +208,6 @@ def build_persistent_repository(store: _Store, settings: Settings):
             for rid, payload in self._store.all("flag"):
                 try:
                     self.flags[rid] = json.loads(payload)
-                except Exception:  # noqa: BLE001
-                    continue
-            for _rid, payload in self._store.all("ab_metric"):
-                try:
-                    self.ab_metrics.append(json.loads(payload))
-                except Exception:  # noqa: BLE001
-                    continue
-            for _rid, payload in self._store.all("latency"):
-                try:
-                    self.stage_latencies.append(json.loads(payload))
                 except Exception:  # noqa: BLE001
                     continue
             if not self.prompts:  # fresh store — seed v1 prompts/model/template (write-through)
@@ -245,17 +241,49 @@ def build_persistent_repository(store: _Store, settings: Settings):
             return item
 
         def record_ab_metric(self, metric: dict) -> dict:
-            out = super().record_ab_metric(metric)
             import uuid as _uuid
+            self._store.upsert("ab_metric", _uuid.uuid4().hex, json.dumps(metric))
+            return metric
 
-            self._store.upsert("ab_metric", _uuid.uuid4().hex, json.dumps(out))
+        def list_ab_metrics(self, prompt_name: str | None = None) -> list[dict]:
+            out = []
+            for _rid, payload in self._store.all("ab_metric"):
+                try:
+                    m = json.loads(payload)
+                    if prompt_name is None or m.get("prompt_name") == prompt_name:
+                        out.append(m)
+                except Exception:
+                    pass
             return out
 
         def record_stage_latency(self, row: dict) -> dict:
-            out = super().record_stage_latency(row)
             import uuid as _uuid
+            self._store.upsert("latency", _uuid.uuid4().hex, json.dumps(row))
+            return row
 
-            self._store.upsert("latency", _uuid.uuid4().hex, json.dumps(out))
+        def list_stage_latencies(self, stage: str | None = None) -> list[dict]:
+            out = []
+            for _rid, payload in self._store.all("latency"):
+                try:
+                    r = json.loads(payload)
+                    if stage is None or r.get("stage") == stage:
+                        out.append(r)
+                except Exception:
+                    pass
+            return out
+
+        def record_audit_event(self, event: dict) -> dict:
+            import uuid as _uuid
+            self._store.upsert("audit", _uuid.uuid4().hex, json.dumps(event))
+            return event
+
+        def list_audit_events(self) -> list[dict]:
+            out = []
+            for _rid, payload in self._store.all("audit"):
+                try:
+                    out.append(json.loads(payload))
+                except Exception:
+                    pass
             return out
 
         def _persist_all_prompts(self) -> None:
@@ -280,6 +308,12 @@ def build_persistent_repository(store: _Store, settings: Settings):
         def add_document_template(self, dt: DocumentTemplate) -> DocumentTemplate:
             out = super().add_document_template(dt)
             self._put_model("doc_template", out)
+            return out
+
+        def add_note_template(self, template: TemplateDefinition) -> TemplateDefinition:
+            out = super().add_note_template(template)
+            # Use pinned_ref as the key (e.g. soap@1)
+            self._put("note_template", template.pinned_ref, template.model_dump_json())
             return out
 
         def save_rendered_document(self, doc: RenderedDocument) -> RenderedDocument:

@@ -74,13 +74,20 @@ class SarvamSTT:
             pass
 
     # ── Real-time (immediate, unlabeled) ─────────────────────────────────────
-    def transcribe(self, audio: bytes, *, session_id: str) -> RawTranscript:
+    def transcribe(self, audio: bytes | str, *, session_id: str) -> RawTranscript:
         t0 = time.perf_counter()
         success = False
         error_message = None
+        fh = None
         try:
+            if isinstance(audio, str):
+                fh = open(audio, "rb")
+                file_obj = fh
+            else:
+                file_obj = audio
+
             resp = self.client.speech_to_text.transcribe(
-                file=("audio.wav", audio),
+                file=("audio.wav", file_obj),
                 model=self.settings.sarvam_stt_model,
                 mode=self.settings.sarvam_mode,
                 language_code=self.settings.sarvam_language_code,
@@ -108,20 +115,33 @@ class SarvamSTT:
             error_message = str(exc)
             raise
         finally:
+            if fh is not None:
+                fh.close()
             latency_ms = int((time.perf_counter() - t0) * 1000)
             self._log_ai(model=self.settings.sarvam_stt_model, agent="sarvam-rt", latency_ms=latency_ms, success=success, error_message=error_message)
 
     # ── Batch (accurate, diarized) ───────────────────────────────────────────
-    def transcribe_diarized(self, audio: bytes, *, session_id: str) -> RawTranscript:
+    def transcribe_diarized(self, audio: bytes | str, *, session_id: str) -> RawTranscript:
         t0 = time.perf_counter()
         success = False
         error_message = None
         tmpdir = tempfile.mkdtemp(prefix="sarvam_")
-        in_path = os.path.join(tmpdir, f"{session_id}.wav")
-        out_dir = os.path.join(tmpdir, "out")
+        
+        # If audio is already a file path, we can upload it directly. If it's bytes, write it.
+        if isinstance(audio, str):
+            in_path = audio
+            out_dir = os.path.join(tmpdir, "out")
+        else:
+            in_path = os.path.join(tmpdir, f"{session_id}.wav")
+            out_dir = os.path.join(tmpdir, "out")
+            try:
+                with open(in_path, "wb") as fh:
+                    fh.write(audio)
+            except Exception as e:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                raise e
+
         try:
-            with open(in_path, "wb") as fh:
-                fh.write(audio)
 
             job = self.client.speech_to_text_job.create_job(
                 model=self.settings.sarvam_stt_model,
@@ -202,10 +222,18 @@ class SarvamSTT:
         raise RuntimeError(f"Sarvam batch outputs never became downloadable after {attempts} tries: {last_exc}")
 
     # ── Dispatch + fallback ──────────────────────────────────────────────────
-    def transcribe_for_session(self, audio: bytes, *, session_id: str, diarize: bool | None = None) -> RawTranscript:
+    def transcribe_for_session(self, audio: bytes | str, *, session_id: str, diarize: bool | None = None) -> RawTranscript:
         diarize = self.settings.sarvam_diarize if diarize is None else diarize
+        
+        # Determine approx duration and handle file paths
+        if isinstance(audio, str):
+            file_size = os.path.getsize(audio)
+            audio_dur = max(0.0, (file_size - 44) / 32000.0)
+        else:
+            audio_dur = _approx_duration_s(audio)
+            
         # Real-time STT is capped at 30s; only use it as a fallback for short clips.
-        short_enough = _approx_duration_s(audio) <= 28.0
+        short_enough = audio_dur <= 28.0
         if diarize:
             try:
                 result = self.transcribe_diarized(audio, session_id=session_id)
@@ -300,7 +328,7 @@ _CANNED: list[tuple[SpeakerRole, str, float]] = [
 class MockSarvamSTT:
     available = False  # signals "not the real provider" to callers/telemetry
 
-    def transcribe(self, audio: bytes, *, session_id: str) -> RawTranscript:
+    def transcribe(self, audio: bytes | str, *, session_id: str) -> RawTranscript:
         segments = [
             TranscriptSegment(
                 id=f"seg-{i + 1:04d}", speaker=spk, text=text, language="en-IN",
@@ -310,7 +338,7 @@ class MockSarvamSTT:
         ]
         return RawTranscript(session_id=session_id, segments=segments)
 
-    def transcribe_for_session(self, audio: bytes, *, session_id: str, diarize: bool | None = None) -> RawTranscript:
+    def transcribe_for_session(self, audio: bytes | str, *, session_id: str, diarize: bool | None = None) -> RawTranscript:
         return self.transcribe(audio, session_id=session_id)
 
 

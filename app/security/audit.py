@@ -27,19 +27,21 @@ class AuditEvent(BaseModel):
 class AuditLog:
     def __init__(self, path: str) -> None:
         self.path = Path(path)
-        self._events: list[AuditEvent] = []
 
     def record(self, event: AuditEvent) -> AuditEvent:
-        self._events.append(event)
+        from app.data.repo import get_repo
         try:
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.write(event.model_dump_json() + "\n")
-        except OSError:
+            get_repo().record_audit_event(event.model_dump(mode="json"))
+        except Exception:
             pass  # never let audit-sink failure break the request path
         return event
 
     def events(self) -> list[AuditEvent]:
-        return list(self._events)
+        from app.data.repo import get_repo
+        try:
+            return [AuditEvent.model_validate(e) for e in get_repo().list_audit_events()]
+        except Exception:
+            return []
 
 
 _audit: AuditLog | None = None

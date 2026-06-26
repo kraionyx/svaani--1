@@ -130,7 +130,7 @@ class Settings(BaseSettings):
     # → JWT Settings). Tokens are HS256-signed with that secret and carry aud="authenticated".
     # Projects migrated to asymmetric signing keys instead expose a JWKS endpoint — set
     # SCRIBE_JWT_JWKS_URL (or leave blank to auto-derive it from SCRIBE_SUPABASE_URL).
-    auth_mode: str = "dev"
+    auth_mode: str = "jwt"
     jwt_secret: str = ""                       # HS256 shared secret (Supabase JWT secret / dev)
     jwt_jwks_url: str = ""                      # RS256/ES256 JWKS endpoint (asymmetric keys)
     # Supabase access tokens carry aud="authenticated"; set SCRIBE_JWT_AUDIENCE=authenticated

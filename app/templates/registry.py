@@ -17,8 +17,7 @@ _DEFAULT_DIR = Path(__file__).resolve().parents[2] / "docs" / "templates"
 
 class TemplateRegistry:
     def __init__(self) -> None:
-        # keyed by (template_id, version)
-        self._store: dict[tuple[str, int], TemplateDefinition] = {}
+        pass
 
     # ── loading ────────────────────────────────────────────────────────────
     def load_dir(self, directory: Path | None = None) -> int:
@@ -33,19 +32,32 @@ class TemplateRegistry:
         return count
 
     def register(self, template: TemplateDefinition) -> None:
-        self._store[(template.template_id, template.version)] = template
+        from app.data.repo import get_repo
+        get_repo().add_note_template(template)
 
     # ── lookup ───────────────────────────────────────────────────────────────
     def get(self, template_id: str, version: int | None = None) -> TemplateDefinition:
+        from app.data.repo import get_repo
+        templates = get_repo().list_note_templates()
         if version is not None:
-            return self._store[(template_id, version)]
-        versions = [v for (tid, v) in self._store if tid == template_id]
+            for t in templates:
+                if t.template_id == template_id and t.version == version:
+                    return t
+            raise KeyError(f"Unknown template '{template_id}' version {version}")
+        
+        versions = [t.version for t in templates if t.template_id == template_id]
         if not versions:
             raise KeyError(f"Unknown template '{template_id}'")
-        return self._store[(template_id, max(versions))]
+        
+        max_version = max(versions)
+        for t in templates:
+            if t.template_id == template_id and t.version == max_version:
+                return t
+        raise KeyError(f"Unknown template '{template_id}'")
 
     def list_templates(self) -> list[TemplateDefinition]:
-        return list(self._store.values())
+        from app.data.repo import get_repo
+        return get_repo().list_note_templates()
 
     @staticmethod
     def component_catalog() -> list[dict[str, str]]:

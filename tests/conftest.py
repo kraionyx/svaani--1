@@ -29,10 +29,20 @@ def _reset_session_store():
     """Give each test a fresh in-memory session store (the get_store() singleton is
     module-global, so without this state leaks between tests)."""
     import app.store as _store_mod
+    import app.data.repo as _repo_mod
+    import app.templates.registry as _registry_mod
 
     _store_mod._store = None
+    if _repo_mod._repo is not None:
+        _repo_mod._repo.close()
+    _repo_mod._repo = None
+    _registry_mod._registry = None
     yield
     _store_mod._store = None
+    if _repo_mod._repo is not None:
+        _repo_mod._repo.close()
+    _repo_mod._repo = None
+    _registry_mod._registry = None
 
 from app.schemas.clinical import (
     ChiefComplaint,

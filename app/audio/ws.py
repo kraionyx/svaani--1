@@ -59,7 +59,14 @@ async def consultation_ws(
 ) -> None:
     await websocket.accept()
     session: ConsultationSession | None = None
-    buffer = bytearray()                       # raw PCM16 for the batch-diarized pass
+    import tempfile
+    import struct
+    import os
+
+    audio_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    audio_path = audio_temp.name
+    audio_size = 0
+    audio_lock = asyncio.Lock()
     live_segments: list[tuple[str, str]] = []  # (segment_id, text) from streaming STT
     sock = None                                # open Sarvam streaming socket
     stream_cm = None                           # its async context manager
@@ -129,7 +136,9 @@ async def consultation_ws(
             # ── audio frame ──────────────────────────────────────────────────
             if message.get("bytes") is not None:
                 chunk = message["bytes"]
-                buffer.extend(chunk)
+                async with audio_lock:
+                    audio_temp.write(chunk)
+                    audio_size += len(chunk)
                 if sock is not None:
                     try:
                         await sock.transcribe(audio=sarvam_stream.encode_chunk(chunk), sample_rate=16000)
@@ -168,7 +177,11 @@ async def consultation_ws(
                     )
                 except Exception:  # noqa: BLE001 — analytics must never break a consult
                     pass
-                buffer.clear()
+                async with audio_lock:
+                    audio_temp.seek(0)
+                    audio_temp.truncate(0)
+                    audio_temp.write(b'\0' * 44)  # WAV header placeholder
+                    audio_size = 0
                 live_segments.clear()
                 streaming = False
                 if sarvam_stream.streaming_available(settings):
@@ -192,14 +205,21 @@ async def consultation_ws(
                     continue
                 await _close_stream()  # cancel reader first → no concurrent sends below
 
-                if len(buffer) < _MIN_AUDIO_BYTES and not live_segments:
+                if audio_size < _MIN_AUDIO_BYTES and not live_segments:
                     session.transition(ReviewState.ESCALATION_REQUIRED)
                     await websocket.send_json({
                         "type": "error", "stage": "processing", "session_id": session.session_id,
                         "state": session.state.value, "message": "no audible speech captured",
                     })
                     continue
-                await _finalize(websocket, store, settings, session, bytes(buffer), live_segments)
+                # Finalize the WAV header
+                async with audio_lock:
+                    audio_temp.seek(0)
+                    header = struct.pack('<4sI4s4sIHHIIHH4sI', b'RIFF', 36 + audio_size, b'WAVE', b'fmt ', 16, 1, 1, 16000, 32000, 2, 16, b'data', audio_size)
+                    audio_temp.write(header)
+                    audio_temp.flush()
+
+                await _finalize(websocket, store, settings, session, audio_path, live_segments)
 
             # ── cancel ───────────────────────────────────────────────────────
             elif action == "cancel":
@@ -212,7 +232,11 @@ async def consultation_ws(
                     except Exception:  # noqa: BLE001 — best-effort cleanup
                         logger.info("cancel: could not delete session %s", session.session_id, exc_info=True)
                     session = None
-                buffer.clear()
+                async with audio_lock:
+                    audio_temp.seek(0)
+                    audio_temp.truncate(0)
+                    audio_temp.write(b'\0' * 44)
+                    audio_size = 0
                 live_segments.clear()
                 await websocket.send_json({"type": "stage_update", "stage": "cancelled"})
                 # The client closes right after; stop processing further frames.
@@ -225,6 +249,11 @@ async def consultation_ws(
         return
     finally:
         await _close_stream()
+        audio_temp.close()
+        try:
+            os.unlink(audio_path)
+        except OSError:
+            pass
 
 
 async def _stream_note(websocket: WebSocket, note, llm, *, timeout_s: float) -> None:
@@ -285,14 +314,22 @@ def _has_text(raw: RawTranscript) -> bool:
     return any((s.text or "").strip() for s in raw.segments)
 
 
-async def _diarize(settings: Settings, session_id: str, pcm: bytes) -> RawTranscript | None:
+async def _diarize(settings: Settings, session_id: str, audio: bytes | str) -> RawTranscript | None:
     """Run the bounded batch-diarized pass; return None if unavailable/slow/failed."""
-    if len(pcm) < _MIN_AUDIO_BYTES:
-        return None
+    
+    if isinstance(audio, str):
+        size = os.path.getsize(audio)
+        if size < _MIN_AUDIO_BYTES + 44:
+            return None
+        wav_input = audio
+    else:
+        if len(audio) < _MIN_AUDIO_BYTES:
+            return None
+        wav_input = sarvam_stream.pcm16_to_wav(audio, rate=16000)
+
     try:
-        wav = sarvam_stream.pcm16_to_wav(pcm, rate=16000)
         return await asyncio.wait_for(
-            asyncio.to_thread(get_stt(settings).transcribe_for_session, wav, session_id=session_id),
+            asyncio.to_thread(get_stt(settings).transcribe_for_session, wav_input, session_id=session_id),
             timeout=settings.streaming_diarize_timeout_s,
         )
     except asyncio.TimeoutError:
@@ -314,7 +351,7 @@ async def _emit_pass(
     """
     # Fast pass streams the prose; refine pass narrates in one call (already accurate).
     pipeline_settings = settings.model_copy(update={"narrative_notes": refine})
-    result = await asyncio.to_thread(run_pipeline, raw, template, settings=pipeline_settings)
+    result = await run_pipeline(raw, template, settings=pipeline_settings)
 
     session.raw_transcript = raw
     session.clean_transcript = result.clean
@@ -388,7 +425,7 @@ async def _finalize(
     store: SessionStore,
     settings: Settings,
     session: ConsultationSession,
-    pcm: bytes,
+    audio_input: bytes | str,
     live_segments: list[tuple[str, str]],
 ) -> None:
     """On stop: run the flow for the doctor's per-consult mode (Goal 3).
@@ -409,7 +446,7 @@ async def _finalize(
 
         async def _single_diarized_pass() -> None:
             """One accurate pass: prefer the diarized transcript, fall back to live."""
-            raw = await _diarize(settings, session.session_id, pcm)
+            raw = await _diarize(settings, session.session_id, audio_input)
             if raw is None or not _has_text(raw):
                 raw = live_raw
             if not _has_text(raw):
@@ -423,7 +460,7 @@ async def _finalize(
                 await _single_diarized_pass()
             else:
                 await _emit_pass(websocket, store, settings, session, live_raw, template, refine=False)
-                diar_raw = await _diarize(settings, session.session_id, pcm)
+                diar_raw = await _diarize(settings, session.session_id, audio_input)
                 if diar_raw is not None and _has_text(diar_raw):
                     profile = _diarized_profile(diar_raw, settings)
                     if profile.is_complex:
@@ -437,7 +474,7 @@ async def _finalize(
             # diarized (speaker-labeled) pass — fast reply AND full accuracy on every consult.
             if have_live:
                 await _emit_pass(websocket, store, settings, session, live_raw, template, refine=False)
-                diar_raw = await _diarize(settings, session.session_id, pcm)
+                diar_raw = await _diarize(settings, session.session_id, audio_input)
                 if diar_raw is not None and _has_text(diar_raw):
                     assign_clinical_roles(diar_raw)
                     await _emit_pass(websocket, store, settings, session, diar_raw, template, refine=True)

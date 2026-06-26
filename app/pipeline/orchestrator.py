@@ -6,9 +6,9 @@ from grounded items.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import BaseModel, Field
 
@@ -52,34 +52,48 @@ class PipelineResult(BaseModel):
 logger = logging.getLogger("svaani.pipeline")
 
 
-def _staged_analyze(
+async def _staged_analyze(
     raw: RawTranscript, llm: MedicalLLM, settings: Settings
 ) -> tuple[CleanTranscript, ClinicalExtraction, list]:
     """Original three-call path: clean, then extract ∥ risk concurrently."""
-    set_agent("clean")
-    clean = clean_transcript(raw, llm, settings)
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    
+    def _run_clean():
+        set_agent("clean")
+        return clean_transcript(raw, llm, settings)
+        
+    clean = await asyncio.to_thread(_run_clean)
+    
+    def _run_extract():
         set_agent("extract")
-        extraction_future = pool.submit(extract_clinical, clean, llm)
+        return extract_clinical(clean, llm)
+        
+    def _run_risk():
         set_agent("risk")
-        risk_markers_future = pool.submit(llm_risk_markers, clean, llm)
-        return clean, extraction_future.result(), risk_markers_future.result()
+        return llm_risk_markers(clean, llm)
+        
+    extraction, risk_markers = await asyncio.gather(
+        asyncio.to_thread(_run_extract),
+        asyncio.to_thread(_run_risk)
+    )
+    return clean, extraction, risk_markers
 
 
-def _analyze(
+async def _analyze(
     raw: RawTranscript, llm: MedicalLLM, settings: Settings
 ) -> tuple[CleanTranscript, ClinicalExtraction, list]:
     """Produce (clean, extraction, llm_risk_markers), preferring the single-pass call."""
     if settings.single_pass_llm and llm.available:
         try:
-            set_agent("combined")
-            return analyze_consultation(raw, llm, settings)
+            def _run_combined():
+                set_agent("combined")
+                return analyze_consultation(raw, llm, settings)
+            return await asyncio.to_thread(_run_combined)
         except Exception:  # noqa: BLE001 — best-effort; staged path is the safety net
             logger.warning("single-pass analysis failed; falling back to staged pipeline", exc_info=True)
-    return _staged_analyze(raw, llm, settings)
+    return await _staged_analyze(raw, llm, settings)
 
 
-def run_pipeline(
+async def run_pipeline(
     raw: RawTranscript,
     template: TemplateDefinition,
     *,
@@ -99,14 +113,14 @@ def run_pipeline(
         assign_clinical_roles(raw)
 
     _t0 = time.perf_counter()
-    clean, extraction, risk_markers = _analyze(raw, llm, settings)
+    clean, extraction, risk_markers = await _analyze(raw, llm, settings)
     timings_ms["analyze"] = int((time.perf_counter() - _t0) * 1000)
 
     # Goal 1: resolve WHO the consult is about before grounding the note, so symptoms
     # are attributed to the referenced patient (e.g. 'son') and not the speaker (mother).
     profile: ConversationProfile | None = None
     if settings.resolve_subjects:
-        profile = resolve_relationships(clean if clean.segments else raw, llm)
+        profile = await asyncio.to_thread(resolve_relationships, clean if clean.segments else raw, llm)
         assess_complexity(profile, clean if clean.segments else raw, settings)
         # The LLM extraction may set referenced_patient itself; otherwise adopt the
         # resolver's answer so the note always knows whose record this is.
@@ -128,12 +142,14 @@ def run_pipeline(
     _t0 = time.perf_counter()
     note = generate_note(extraction, template)
     if settings.narrative_notes:
-        set_agent("narrate")
-        note = narrate_note(note, llm)
+        def _run_narrate():
+            set_agent("narrate")
+            return narrate_note(note, llm)
+        note = await asyncio.to_thread(_run_narrate)
     timings_ms["note"] = int((time.perf_counter() - _t0) * 1000)
 
     _t0 = time.perf_counter()
-    risk = assess_risk(clean, extraction, llm, settings, llm_markers=risk_markers)
+    risk = await asyncio.to_thread(assess_risk, clean, extraction, llm, settings, risk_markers)
     timings_ms["risk"] = int((time.perf_counter() - _t0) * 1000)
 
     timings_ms["total"] = int((time.perf_counter() - _t_total) * 1000)
