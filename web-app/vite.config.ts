@@ -52,7 +52,10 @@ export default defineConfig({
       clientPort: 443
     },
     proxy: {
-      '/admin1/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '^/(admin1/api|admin|sessions|templates|auth|health|prompts|feature-flags|documents)(/.*)?$': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true
+      },
     },
   },
 });
