@@ -62,6 +62,7 @@ function Splash({ label = 'Loading…' }: { label?: string }) {
 function Gated() {
   const { session, loading } = useAuth();
   if (loading) return <Splash label="Signing you in…" />;
+  // Bypassing login for now:
   if (!session) return <LoginPage />;
   return <AppRouter />;
 }

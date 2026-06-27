@@ -49,8 +49,11 @@ export function ReviewPrompt({
   }
 
   return (
-    <div className="card panel review-prompt">
-      <div className="step-h"><span className="n">✓</span><h3>Was this note helpful?</h3></div>
+    <div className="flex flex-col gap-3 mt-6">
+      <div className="flex items-center gap-3 mb-2 opacity-70">
+        <span className="flex items-center justify-center w-6 h-6 rounded-full bg-sky-500/20 text-sky-700 text-xs font-bold">✓</span>
+        <h3 className="text-[11px] font-bold tracking-[1.5px] text-slate-500 uppercase">Was this note helpful?</h3>
+      </div>
       <div className="row" style={{ gap: 8, marginBottom: 8 }}>
         <button
           className={`btn sm${rating === 'helpful' ? '' : ' ghost'}`}

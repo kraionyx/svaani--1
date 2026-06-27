@@ -22,6 +22,8 @@ Screenshot*.png
 # Python
 venv/
 .venv/
+venv 2/
+venv2/
 __pycache__/
 *.py[cod]
 *.egg-info/

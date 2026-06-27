@@ -9,6 +9,7 @@ interface Props {
   analyser: AnalyserNode | null;
   modeChoice: 'realtime' | 'batch' | 'auto' | 'hybrid';
   onModeChoice: (v: 'realtime' | 'batch' | 'auto' | 'hybrid') => void;
+  variant?: 'sidebar' | 'center';
 }
 
 type ModeId = 'realtime' | 'hybrid' | 'batch' | 'auto';
@@ -18,12 +19,7 @@ const MODE_OPTIONS: { id: ModeId; label: string }[] = [
   { id: 'batch', label: 'Batch' },
   { id: 'auto', label: 'Auto' },
 ];
-const MODE_HINT: Record<ModeId, string> = {
-  realtime: 'Fastest — note streams live; no speaker separation.',
-  hybrid: 'Best balance — instant draft, then always sharpens to full speaker-labeled accuracy.',
-  batch: 'Most accurate — full speaker labels; note is produced after you stop.',
-  auto: 'AI decides — keeps the live draft for simple consults, sharpens only when complex.',
-};
+
 
 function fmtTime(s: number) {
   const m = Math.floor(s / 60);
@@ -72,8 +68,8 @@ export function Recorder(p: Props) {
       return { w, h };
     };
 
-    const accent = () => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#1ec7b1';
-    const RECORD_COLOR = '#e74c3c';
+    const accent = () => '#38bdf8'; // sky-400
+    const RECORD_COLOR = '#0ea5e9'; // sky-500
 
     // Static baseline — no requestAnimationFrame, so it cannot animate without audio.
     const drawFlat = () => {
@@ -118,65 +114,105 @@ export function Recorder(p: Props) {
 
     if (isLive) drawLive(); else drawFlat();
     return () => cancelAnimationFrame(raf);
-  }, [p.analyser, p.recording, p.paused]);
+  }, [p.analyser, p.recording, p.paused, p.variant]);
+
+  if (p.variant === 'center') {
+    return (
+      <div className="flex flex-col items-center w-full transition-all duration-700 ease-in-out transform opacity-100 scale-100">
+        <div className="flex items-center bg-white shadow-lg shadow-sky-900/5 rounded-[2rem] border border-slate-200/60 p-2.5 w-full max-w-3xl gap-3">
+          
+          <div className="relative flex-1">
+            <select 
+              value={p.templateId} 
+              disabled={p.busy} 
+              onChange={(e) => p.onTemplate(e.target.value)}
+              className="appearance-none bg-slate-50 border border-slate-200 hover:border-sky-200 rounded-full pl-5 pr-10 py-3.5 text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-100 focus:bg-white w-full cursor-pointer transition-colors"
+            >
+              {p.templates.map((t) => <option key={t.template_id} value={t.template_id}>{t.name}</option>)}
+            </select>
+            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+          </div>
+
+          <div className="relative flex-1">
+            <select
+              value={p.modeChoice}
+              disabled={p.recording || p.busy}
+              onChange={(e) => p.onModeChoice(e.target.value as any)}
+              className="appearance-none bg-slate-50 border border-slate-200 hover:border-sky-200 rounded-full pl-5 pr-10 py-3.5 text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-100 focus:bg-white w-full cursor-pointer transition-colors"
+            >
+              {MODE_OPTIONS.map((m) => <option key={m.id} value={m.id}>{m.label} Mode</option>)}
+            </select>
+            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+          </div>
+
+          <button 
+            className="w-14 h-14 rounded-full flex items-center justify-center transition-all shadow-md shadow-sky-500/20 flex-shrink-0 bg-sky-500 hover:bg-sky-600 hover:scale-105 active:scale-95 text-white"
+            onClick={p.onRecord} 
+            disabled={p.busy && !p.recording}
+            title="Start consultation"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>
+          </button>
+        </div>
+
+        <div className="flex items-center gap-6 mt-6 opacity-70">
+           <input ref={fileRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) p.onUpload(f); e.currentTarget.value = ''; }} />
+           <button className="text-[13px] font-medium text-slate-500 hover:text-slate-800 transition-colors flex items-center gap-2" disabled={p.busy || p.recording} onClick={() => fileRef.current?.click()}>
+             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+             Upload Audio
+           </button>
+           <span className="text-slate-300">•</span>
+           <button className="text-[13px] font-medium text-slate-500 hover:text-slate-800 transition-colors flex items-center gap-2" disabled={p.busy || p.recording} onClick={p.onSimulate}>
+             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+             Simulate Session
+           </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="card panel">
-      <div className="step-h"><span className="n">1</span><h3>Capture</h3></div>
-      <label className="lbl">Template</label>
-      <select value={p.templateId} disabled={p.busy} onChange={(e) => p.onTemplate(e.target.value)}>
-        {p.templates.map((t) => <option key={t.template_id} value={t.template_id}>{t.name}</option>)}
-      </select>
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-3 mb-1 opacity-80">
+        <span className="flex items-center justify-center w-6 h-6 rounded-full bg-sky-100 text-sky-600 text-xs font-bold">1</span>
+        <h3 className="text-[11px] font-bold tracking-[1.5px] text-slate-500 uppercase">Capture</h3>
+      </div>
 
-      <div className={`mic-wrap ${p.recording ? 'live' : ''}`}>
-        <canvas ref={canvasRef} className="mic-canvas" />
-        <div className="mic-status">
+      <div className={`relative overflow-hidden border rounded-xl p-4 bg-gradient-to-b from-sky-50/50 to-white transition-all duration-300 ${p.recording ? 'border-sky-400 shadow-[0_0_0_3px_rgba(56,189,248,0.2)]' : 'border-slate-200'}`}>
+        <canvas ref={canvasRef} className="w-full h-12 block relative z-10" />
+        <div className="text-xs text-slate-500 mt-2 min-h-[16px]">
           {p.recording ? (p.paused
-            ? <b style={{ color: 'var(--warn, #e0a500)' }}>Paused — {fmtTime(elapsed)}</b>
-            : <b>Listening… {p.streaming ? '(streaming live)' : ''} <span style={{ fontVariantNumeric: 'tabular-nums', marginLeft: 6 }}>{fmtTime(elapsed)}</span></b>)
-            : p.busy ? <b>{p.stage || 'Processing'}…</b>
-              : 'Ready — press record to start.'}
+            ? <b className="text-amber-500 font-bold">Paused — {fmtTime(elapsed)}</b>
+            : <b className="text-sky-600 font-bold">Listening… {p.streaming ? '(streaming live)' : ''} <span className="tabular-nums ml-1.5">{fmtTime(elapsed)}</span></b>)
+            : p.busy ? <b className="text-sky-600 font-bold">{p.stage || 'Processing'}…</b>
+              : 'Session captured.'}
         </div>
       </div>
-
-      <label className="lbl">Inference mode</label>
-      <div className="mode-seg" role="group" aria-label="Inference mode">
-        {MODE_OPTIONS.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            className={p.modeChoice === m.id ? 'active' : ''}
-            disabled={p.recording || p.busy}
-            onClick={() => p.onModeChoice(m.id)}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
-      <p className="hint" style={{ marginTop: 6 }}>{MODE_HINT[p.modeChoice]}</p>
-
-      <button className={`btn big ${p.recording ? 'danger' : ''}`} onClick={p.onRecord} disabled={p.busy && !p.recording}>
-        {p.recording ? '■ Stop & finalize' : '● Record consultation'}
-      </button>
 
       {p.recording && (
-        <div className="row" style={{ marginTop: 8 }}>
-          <button className="btn ghost sm" onClick={p.onPause} style={{ flex: 1 }}>
-            {p.paused ? '▶ Resume' : '❚❚ Pause'}
+        <div className="flex flex-col mt-2 gap-2">
+          <button 
+            className="w-full py-3.5 rounded-xl text-[14px] font-bold shadow-md shadow-sky-500/20 text-white bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 transition-all active:scale-[0.98]" 
+            onClick={p.onRecord} 
+            disabled={p.busy && !p.recording}
+          >
+            ■ Stop & finalize
           </button>
-          <button className="btn ghost sm danger" onClick={p.onCancel} style={{ flex: 1 }}>
-            ✕ Cancel
-          </button>
+          
+          <div className="flex gap-2">
+            <button className="flex-1 py-2.5 rounded-xl text-[13px] font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors active:scale-[0.98]" onClick={p.onPause}>
+              {p.paused ? '▶ Resume' : '❚❚ Pause'}
+            </button>
+            <button className="flex-1 py-2.5 rounded-xl text-[13px] font-semibold text-slate-600 bg-slate-100 hover:bg-red-50 hover:text-red-600 transition-colors active:scale-[0.98]" onClick={p.onCancel}>
+              ✕ Cancel
+            </button>
+          </div>
         </div>
       )}
-
-      <div className="row">
-        <input ref={fileRef} type="file" accept="audio/*" style={{ display: 'none' }}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) p.onUpload(f); e.currentTarget.value = ''; }} />
-        <button className="btn ghost sm" disabled={p.busy || p.recording} onClick={() => fileRef.current?.click()}>Upload audio</button>
-        <button className="btn ghost sm" disabled={p.busy || p.recording} onClick={p.onSimulate}>▶ Simulate</button>
-      </div>
-      <p className="hint">Record uses real-time streaming STT; on stop, the consult is diarized and the note streams in.</p>
     </div>
   );
 }

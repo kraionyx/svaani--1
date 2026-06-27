@@ -3,16 +3,12 @@ import { Outlet } from 'react-router-dom';
 import * as API from '../api';
 import { useStore } from '../store';
 import { onToast, toast } from '../toast';
-import { ThemeStudio } from '../components/ThemeStudio';
-import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
-import { Breadcrumbs } from './Breadcrumbs';
-import { SidebarProvider } from '@/components/ui/sidebar';
+import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar';
 
 export function AppLayout() {
   const s = useStore();
   const [toastMsg, setToastMsg] = useState<{ m: string; e: boolean } | null>(null);
-  const [studioOpen, setStudioOpen] = useState(false);
 
   useEffect(() => {
     onToast((m, e) => { setToastMsg({ m, e }); setTimeout(() => setToastMsg(null), e ? 6500 : 3000); });
@@ -27,20 +23,15 @@ export function AppLayout() {
 
   return (
     <SidebarProvider>
-      <div className="app-shell w-full h-screen flex flex-col overflow-hidden">
-        <TopBar onOpenStudio={setStudioOpen} />
-        <div className="app-body flex flex-1 overflow-hidden relative">
-          <Sidebar />
-          <div className="app-content flex-1 overflow-auto relative">
-            <Breadcrumbs />
-            <Suspense fallback={<div className="route-loading"><span className="route-spinner" aria-hidden="true" /> Loading…</div>}>
-              <Outlet />
-            </Suspense>
-          </div>
+      <Sidebar />
+      <SidebarInset className="w-full h-screen flex flex-col overflow-hidden bg-[#eef1f7]">
+        <div className="app-content flex-1 overflow-hidden relative flex flex-col">
+          <Suspense fallback={<div className="route-loading"><span className="route-spinner" aria-hidden="true" /> Loading…</div>}>
+            <Outlet />
+          </Suspense>
         </div>
-        {studioOpen && <ThemeStudio onClose={() => setStudioOpen(false)} />}
-        {toastMsg && <div className={`toast ${toastMsg.e ? 'err' : ''}`}>{toastMsg.m}</div>}
-      </div>
+      </SidebarInset>
+      {toastMsg && <div className={`toast ${toastMsg.e ? 'err' : ''}`}>{toastMsg.m}</div>}
     </SidebarProvider>
   );
 }

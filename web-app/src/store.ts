@@ -36,11 +36,16 @@ interface AppState {
   modeNotice: { from: string; to: string; reason: string; est_delay_s: number[] } | null;
   reviewSubmitted: boolean;
 
+  history: import('./api').SessionSummary[];
+
   set: (p: Partial<AppState>) => void;
   resetSession: () => void;
   addSegment: (s: LiveSegment) => void;
   replaceSegments: (segs: LiveSegment[]) => void;
   noteChunk: (c: { section_id: string; label?: string; delta?: string; start?: boolean; done?: boolean }) => void;
+  loadHistory: () => Promise<void>;
+  loadOutputs: (sid: string) => Promise<void>;
+  openSession: (sid: string) => Promise<void>;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -73,6 +78,7 @@ export const useStore = create<AppState>((set) => ({
   confidenceReasons: [],
   modeNotice: null,
   reviewSubmitted: false,
+  history: [],
 
   set: (p) => set(p),
   resetSession: () => set({
@@ -82,7 +88,6 @@ export const useStore = create<AppState>((set) => ({
     confidenceBand: null, confidenceReasons: [], modeNotice: null, reviewSubmitted: false,
   }),
   addSegment: (s) => set((st) => {
-    // A `final` segment replaces the live (unlabeled) view with the diarized one.
     if (s.final) {
       const kept = st.segments.filter((x) => x.final);
       return { segments: [...kept, s] };
@@ -99,4 +104,38 @@ export const useStore = create<AppState>((set) => ({
     else if (c.delta) live[c.section_id] = { ...cur, text: cur.text + c.delta };
     return { liveNote: live, liveNoteOrder: order };
   }),
+  loadHistory: async () => {
+    try {
+      const hist = await import('./api').then(api => api.listSessions());
+      set({ history: hist });
+    } catch (e) { /* ignore */ }
+  },
+  loadOutputs: async (sid: string) => {
+    try {
+      const API = await import('./api');
+      const [note, risk, extraction, raw, clean] = await Promise.all(
+        ['note', 'risk', 'extraction', 'raw', 'clean'].map((k) => API.getOutput(sid, k).catch(() => null))
+      );
+      set({ note, risk, extraction, raw, clean });
+      if (raw && raw.segments && Array.isArray(raw.segments)) {
+        const mapped = raw.segments.map((x: any) => ({
+          speaker: x.speaker || 'unknown',
+          text: x.text || '',
+          span_id: x.id || x.span_id || `legacy-${Math.random()}`,
+          final: true,
+        }));
+        set({ segments: mapped });
+      }
+    } catch (e) {}
+  },
+  openSession: async (sid: string) => {
+    const API = await import('./api');
+    const toast = await import('./toast').then(m => m.toast);
+    try {
+      useStore.getState().resetSession();
+      const meta: any = await API.api(`/sessions/${sid}`);
+      set({ sessionId: sid, reviewState: meta.state, activeTab: 'note' });
+      await useStore.getState().loadOutputs(sid);
+    } catch (e: any) { toast(e.message || 'could not open consultation', true); }
+  }
 }));

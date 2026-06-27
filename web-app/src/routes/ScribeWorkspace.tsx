@@ -21,60 +21,17 @@ import { SpeakerTimeline } from '../components/SpeakerTimeline';
 import { ReviewPrompt } from '../components/ReviewPrompt';
 import { PrescriptionPreview } from '../components/PrescriptionPreview';
 import { AdminDashboard } from '../components/AdminDashboard';
-import { ThreeScene } from '../components/ThreeScene';
 
-function formatSessionDate(isoString?: string | null) {
-  if (!isoString) return '';
-  const d = new Date(isoString);
-  if (isNaN(d.getTime())) return '';
-  const datePart = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  const timePart = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-  return `${datePart}, ${timePart}`;
-}
 
 export function ScribeWorkspace() {
   const s = useStore();
   const { session } = useAuth();
+  const [signOpen, setSignOpen] = useState(false);
   const sockRef = useRef<ConsultSocket | null>(null);
   const micRef = useRef<MicHandle | null>(null);
-  const [signOpen, setSignOpen] = useState(false);
-  const [history, setHistory] = useState<API.SessionSummary[]>([]);
-  const [filterQuery, setFilterQuery] = useState('');
-
-  const loadHistory = () => { API.listSessions().then(setHistory).catch(() => { }); };
-
   useEffect(() => {
-    loadHistory();
+    s.loadHistory();
   }, []);
-
-  // Reopen one of the user's past consultations (loads its saved outputs).
-  async function openSession(sid: string) {
-    try {
-      s.resetSession();
-      const meta: any = await API.api(`/sessions/${sid}`);
-      s.set({ sessionId: sid, reviewState: meta.state, activeTab: 'note' });
-      await loadOutputs(sid);
-    } catch (e: any) { toast(e.message || 'could not open consultation', true); }
-  }
-
-  async function loadOutputs(sid: string) {
-    const [note, risk, extraction, raw, clean] = await Promise.all(
-      ['note', 'risk', 'extraction', 'raw', 'clean'].map((k) => API.getOutput(sid, k).catch(() => null)),
-    );
-    // Don't force the active tab here — the refine pass calls this while the user may be
-    // viewing another tab; callers that should land on the note set it explicitly.
-    s.set({ note, risk, extraction, raw, clean });
-
-    if (raw && raw.segments && Array.isArray(raw.segments)) {
-      const mapped = raw.segments.map((x: any) => ({
-        speaker: x.speaker || 'unknown',
-        text: x.text || '',
-        span_id: x.id || x.span_id || `legacy-${Math.random()}`,
-        final: true,
-      }));
-      s.replaceSegments(mapped);
-    }
-  }
 
   // ── Streaming consult via WebSocket ────────────────────────────────────────
   async function record() {
@@ -93,12 +50,12 @@ export function ScribeWorkspace() {
         onAnalysis: (a) => s.set({ extraction: a.extraction, risk: a.risk, grounding: a.grounding }),
         onDraft: async (d) => {
           s.set({ reviewState: d.state as API.ReviewState, grounding: d.grounding, recording: false, busy: false, activeTab: 'note' });
-          await loadOutputs(d.session_id);   // server-provided id — avoids the stale-snapshot bug
-          loadHistory();                     // surface the new consult in "My consultations"
+          await s.loadOutputs(d.session_id);   // server-provided id — avoids the stale-snapshot bug
+          s.loadHistory();                     // surface the new consult in "My consultations"
           toast(`Draft ready — risk ${Math.round((d.risk_score || 0) * 100)}%.`);
         },
         // Refine pass: diarized transcript + sharpened outputs — re-fetch everything.
-        onRefined: async (r) => { await loadOutputs(r.session_id); toast('Refined with speaker labels.'); },
+        onRefined: async (r) => { await s.loadOutputs(r.session_id); toast('Refined with speaker labels.'); },
         // Intelligence events (Goals 4 & 5).
         onConfidenceUpdate: (c) => s.set({
           confidenceBand: c.confidence_band as any,
@@ -149,18 +106,18 @@ export function ScribeWorkspace() {
   }
   async function simulate() {
     s.set({ busy: true });
-    try { const sid = await newSession(); const r: any = await API.simulate(sid); s.set({ reviewState: r.state, grounding: r.grounding }); await loadOutputs(sid); s.set({ activeTab: 'note' }); toast('Draft ready (simulated).'); }
+    try { const sid = await newSession(); const r: any = await API.simulate(sid); s.set({ reviewState: r.state, grounding: r.grounding }); await s.loadOutputs(sid); s.set({ activeTab: 'note' }); toast('Draft ready (simulated).'); }
     catch (e: any) { toast(e.message, true); } finally { s.set({ busy: false }); }
   }
   async function uploadFile(file: File) {
     s.set({ busy: true });
-    try { const sid = await newSession(); const r: any = await API.uploadAudio(sid, file, file.name); s.set({ reviewState: r.state, grounding: r.grounding }); await loadOutputs(sid); s.set({ activeTab: 'note' }); toast('Draft ready.'); }
+    try { const sid = await newSession(); const r: any = await API.uploadAudio(sid, file, file.name); s.set({ reviewState: r.state, grounding: r.grounding }); await s.loadOutputs(sid); s.set({ activeTab: 'note' }); toast('Draft ready.'); }
     catch (e: any) { toast('STT/processing failed: ' + e.message, true); } finally { s.set({ busy: false }); }
   }
 
   async function doTransition(state: string, extra: any = {}) {
     if (!s.sessionId) return;
-    try { const r: any = await API.transition(s.sessionId, { state, ...extra }); s.set({ reviewState: r.state }); loadHistory(); toast('→ ' + state.replace('_', ' ')); return r; }
+    try { const r: any = await API.transition(s.sessionId, { state, ...extra }); s.set({ reviewState: r.state }); s.loadHistory(); toast('→ ' + state.replace('_', ' ')); return r; }
     catch (e: any) { toast(e.message, true); throw e; }
   }
 
@@ -174,22 +131,42 @@ export function ScribeWorkspace() {
     });
   };
 
+  const recorderProps = {
+    recording: s.recording, paused: s.paused, busy: live, streaming: s.streaming, stage: s.stage,
+    templates: s.templates, templateId: s.templateId, onTemplate: (t: string) => s.set({ templateId: t }),
+    onRecord: record, onSimulate: simulate, onPause: togglePause, onCancel: cancelRecord,
+    onUpload: (f: File) => uploadFile(f), analyser: micRef.current?.analyser || null,
+    modeChoice: s.modeChoice, onModeChoice: (v: any) => { s.set({ modeChoice: v }); localStorage.setItem('svaani-mode', v); }
+  };
+
+  if (!s.sessionId && !live) {
+    const greetingName = session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || 'Doctor';
+    return (
+      <>
+        <NoticeBanner notice={s.modeNotice} onDismiss={() => s.set({ modeNotice: null })} />
+        <div className="relative flex flex-col items-center justify-center h-full w-full overflow-hidden">
+          
+          {/* Decorative soft blue gradient glow at the bottom (seamless) */}
+          <div className="absolute bottom-[-10%] left-1/2 -translate-x-1/2 w-[1200px] h-[600px] rounded-[100%] bg-gradient-to-t from-sky-300/40 via-sky-200/20 to-transparent blur-[120px] pointer-events-none z-0"></div>
+          
+          <div className="flex flex-col items-center justify-center w-full max-w-4xl mx-auto px-6 animate-in fade-in zoom-in-95 duration-500 z-10 pb-12">
+            <h1 className="text-[2.5rem] text-slate-800 font-semibold mb-12 tracking-tight">
+              Good morning, <span className="text-slate-500">{greetingName}</span>
+            </h1>
+            <Recorder variant="center" {...recorderProps} />
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
-    <>
+    <div className="flex flex-col h-full w-full bg-[#eef1f7]">
       <NoticeBanner notice={s.modeNotice} onDismiss={() => s.set({ modeNotice: null })} />
 
-      <main className="grid">
-        <aside className="left">
-          <Recorder
-            recording={s.recording} paused={s.paused} busy={live} streaming={s.streaming} stage={s.stage}
-            templates={s.templates} templateId={s.templateId} onTemplate={(t) => s.set({ templateId: t })}
-            onRecord={record} onSimulate={simulate}
-            onPause={togglePause} onCancel={cancelRecord}
-            onUpload={(f) => uploadFile(f)}
-            analyser={micRef.current?.analyser || null}
-            modeChoice={s.modeChoice}
-            onModeChoice={(v) => { s.set({ modeChoice: v }); localStorage.setItem('svaani-mode', v); }}
-          />
+      <main className="flex flex-1 overflow-hidden animate-in fade-in duration-500">
+        <aside className="w-[320px] bg-white border-r border-slate-200/60 p-5 flex flex-col gap-6 overflow-y-auto hidden-scrollbar shrink-0 z-10 shadow-[2px_0_10px_-4px_rgba(0,0,0,0.05)]">
+          <Recorder variant="sidebar" {...recorderProps} />
           {s.sessionId && (
             <SignOff
               state={s.reviewState} hasNote={!!s.note} signOpen={signOpen}
@@ -200,72 +177,22 @@ export function ScribeWorkspace() {
           {s.sessionId && !s.reviewSubmitted && s.reviewState && !['listening', 'processing'].includes(s.reviewState) && (
             <ReviewPrompt sessionId={s.sessionId} onSubmit={() => s.set({ reviewSubmitted: true })} />
           )}
-          {session && history.length > 0 && (
-            <div className="card" style={{ marginTop: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <b>My consultations</b>
-                <button onClick={loadHistory} title="Refresh" className="btn ghost sm" style={{ padding: '2px 8px' }}>↻</button>
-              </div>
-              <input
-                type="text"
-                className="consultations-search"
-                placeholder="Search ID, template, state..."
-                value={filterQuery}
-                onChange={(e) => setFilterQuery(e.target.value)}
-              />
-              <ul className="consultations-list">
-                {history.filter((h) => {
-                  const q = filterQuery.toLowerCase();
-                  return h.session_id.toLowerCase().includes(q) || (h.template_id || '').toLowerCase().includes(q) || (h.state || '').toLowerCase().includes(q) || (h.signed_by_name || '').toLowerCase().includes(q);
-                }).map((h) => (
-                  <li key={h.session_id} className={`consultation-item ${h.session_id === s.sessionId ? 'active' : ''}`} onClick={() => openSession(h.session_id)}>
-                    <div className="consultation-header">
-                      <span className="consultation-id">{h.session_id.replace('sess-', '')}</span>
-                      {h.template_id && <span className="consultation-tag">{h.template_id}</span>}
-                    </div>
-                    <div className="consultation-footer">
-                      <span className="consultation-date">{formatSessionDate(h.created_at)}</span>
-                      <span className={`state-badge ${h.state}`}>{h.state.replace(/_/g, ' ')}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
         </aside>
 
-        <section className="right">
-          {!s.sessionId && !live ? (
-            <div className="empty-scene-container">
-              <ThreeScene recording={s.recording} busy={s.busy} />
-              <div className="empty-scene-overlay">
-                <div className="empty-card-glass">
-                  <h2>Svaani. Scribe</h2>
-                  <p>Start a consult — record live (streaming), upload audio, or simulate from the capture panel.</p>
-                  <div className="pulse-indicator">
-                    <span className="pulse-dot"></span>
-                    System Active &amp; Ready
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <>
-              <Tabs active={s.activeTab} onTab={(t) => s.set({ activeTab: t })} role={s.role} />
-              <div className="tabbody">
-                {s.activeTab === 'note' && <NoteView />}
-                {s.activeTab === 'risk' && <RiskPanel />}
-                {s.activeTab === 'extraction' && <ExtractionEditor />}
-                {s.activeTab === 'transcript' && <TranscriptView />}
-                {s.activeTab === 'grounding' && <GroundingPanel />}
-                {s.activeTab === 'speakers' && <SpeakerTimeline />}
-                {s.activeTab === 'prescription' && <PrescriptionPreview />}
-                {s.activeTab === 'admin' && <AdminDashboard />}
-              </div>
-            </>
-          )}
+        <section className="flex-1 flex flex-col overflow-y-auto hidden-scrollbar relative p-6 pt-0">
+          <Tabs active={s.activeTab} onTab={(t) => s.set({ activeTab: t })} role={s.role} />
+          <div className="tabbody max-w-4xl mx-auto w-full">
+            {s.activeTab === 'note' && <NoteView />}
+            {s.activeTab === 'risk' && <RiskPanel />}
+            {s.activeTab === 'extraction' && <ExtractionEditor />}
+            {s.activeTab === 'transcript' && <TranscriptView />}
+            {s.activeTab === 'grounding' && <GroundingPanel />}
+            {s.activeTab === 'speakers' && <SpeakerTimeline />}
+            {s.activeTab === 'prescription' && <PrescriptionPreview />}
+            {s.activeTab === 'admin' && <AdminDashboard />}
+          </div>
         </section>
       </main>
-    </>
+    </div>
   );
 }
