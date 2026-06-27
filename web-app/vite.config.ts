@@ -43,8 +43,14 @@ export default defineConfig({
   },
   build: { outDir: 'dist', emptyOutDir: true },
   server: {
+    host: '127.0.0.1',
     port: 5173,
     allowedHosts: ['svaani.kraionyx.com'],
+    hmr: {
+      host: 'svaani.kraionyx.com',
+      protocol: 'wss',
+      clientPort: 443
+    },
     proxy: {
       '/admin1/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
     },
