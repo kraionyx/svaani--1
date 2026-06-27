@@ -62,7 +62,7 @@ from app.schemas.transcript import RawTranscript, SpeakerRole
 from app.stt.sarvam import MockSarvamSTT, get_stt
 from app.store import get_store
 from app.storage.supabase_storage import upload_consultation_files
-from app.templates.document_renderer import render_for_session
+from app.templates.document_renderer import render_for_session, sanitize_html
 from app.templates.registry import get_registry
 from pydantic import BaseModel
 
@@ -443,7 +443,8 @@ def readiness() -> Response:
 
 
 @app.get("/templates")
-def list_templates() -> list[dict]:
+def list_templates(principal: Principal = Depends(get_principal)) -> list[dict]:
+    _check(principal, Permission.VIEW_TRANSCRIPT)
     return [
         {"template_id": t.template_id, "name": t.name, "version": t.version, "hospital_id": t.hospital_id}
         for t in get_registry().list_templates()
@@ -451,12 +452,14 @@ def list_templates() -> list[dict]:
 
 
 @app.get("/templates/components")
-def template_components() -> list[dict]:
+def template_components(principal: Principal = Depends(get_principal)) -> list[dict]:
+    _check(principal, Permission.VIEW_TRANSCRIPT)
     return get_registry().component_catalog()
 
 
 @app.get("/templates/{template_id}")
-def get_template(template_id: str) -> dict:
+def get_template(template_id: str, principal: Principal = Depends(get_principal)) -> dict:
+    _check(principal, Permission.VIEW_TRANSCRIPT)
     try:
         return get_registry().get(template_id).model_dump(mode="json")
     except KeyError:
@@ -830,7 +833,13 @@ async def transition_state(sid: str, req: StateRequest, principal: Principal = D
         raise HTTPException(status_code=409, detail=str(e))
     if req.state is ReviewState.FINALIZED:
         session.signed_by_name = req.signed_by_name.strip()
-        session.signature_image = req.signature_image
+        # The signature is embedded into an <img src> in the PDF/print-out. Only accept an
+        # image data-URL (rejects javascript:/external/HTML payloads) and cap its size.
+        sig = req.signature_image
+        if sig is not None:
+            if not sig.startswith("data:image/") or len(sig) > 1_000_000:
+                raise HTTPException(status_code=422, detail="signature_image must be an image data URL (<1MB)")
+        session.signature_image = sig
         session.signed_at = datetime.now(timezone.utc)
         def _update_doctor():
             get_logging_service().update_doctor(
@@ -1627,7 +1636,9 @@ def edit_document(doc_id: str, req: DocumentEditRequest, principal: Principal = 
     doc = repo.get_rendered_document(doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="unknown document")
-    doc.edited_html = req.edited_html
+    # Strip active content from the doctor-supplied HTML (defense-in-depth: this HTML is later
+    # rendered to the screen / PDF). Layout is preserved; scripts/handlers/js: URLs are removed.
+    doc.edited_html = sanitize_html(req.edited_html)
     doc.status = DocumentStatus.EDITED
     repo.save_rendered_document(doc)
     return doc.model_dump(mode="json")

@@ -38,6 +38,7 @@ export default defineConfig({
   build: { outDir: 'dist', emptyOutDir: true },
   server: {
     port: 5173,
+    allowedHosts: ['svaani.kraionyx.com'],
     proxy: {
       '/admin1/api': { target: 'http://localhost:8000', changeOrigin: true },
     },

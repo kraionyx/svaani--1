@@ -61,7 +61,7 @@ The app boots with no credentials — external calls fall back to mocks. Set the
 | `SCRIBE_GEMINI_MODEL` | default `gemini-2.5-pro` |
 | `SCRIBE_AUTH_MODE` | `dev` (header scaffold) / `jwt` (verified bearer) |
 | `SCRIBE_ENVIRONMENT` | `development` (default) / `production` — see startup guard below |
-| `SCRIBE_ADMIN_PASSWORD` | password for the `/admin1` dashboard (dev fallback `kraionyx1`) |
+| `SCRIBE_ADMIN_PASSWORD` | password for the `/admin1` dashboard (dev fallback `admin@kraionyx`; prod boot is blocked if left at the default) |
 | `SCRIBE_LOG_LEVEL` | `DEBUG`/`INFO`(default)/`WARNING`/`ERROR` |
 | `SCRIBE_LOG_JSON` | `true` ⇒ one JSON object per log line (for aggregators) |
 | `SCRIBE_DEBUG` | `true` ⇒ tracebacks in 500 responses (DEV ONLY) |

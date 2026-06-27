@@ -43,6 +43,19 @@ logger = logging.getLogger("svaani.auth")
 _REMOTE_TTL_S = 60
 _remote_cache: dict[str, tuple[dict, float]] = {}
 
+# Negative cache: tokens Supabase just rejected, so a flood of repeats doesn't re-hit the
+# Auth API. token -> expiry_epoch. Short TTL so a genuinely-renewed token recovers quickly.
+_REMOTE_NEG_TTL_S = 30
+_remote_neg_cache: dict[str, float] = {}
+
+# Circuit breaker on OUTBOUND remote-verify calls. Without a local JWT secret, every distinct
+# unknown token would otherwise trigger one Supabase round-trip — an attacker spraying unique
+# bogus tokens could turn our API into a traffic amplifier against Supabase. Cap the number of
+# live verify calls per rolling window; over the cap we fail closed (401) without calling out.
+_REMOTE_MAX_CALLS = 120
+_REMOTE_CALL_WINDOW_S = 60
+_remote_call_times: list[float] = []
+
 
 class AuthError(Exception):
     """Raised when a required token is missing or invalid (mapped to HTTP 401).
@@ -82,11 +95,24 @@ def _verify_remote(token: str, settings: Settings) -> dict:
     if cached and cached[1] > now:
         logger.debug("auth: remote verify cache-hit user=%s", cached[0].get("sub"))
         return cached[0]
+    # Negative cache: a token Supabase rejected moments ago is still bad — don't re-ask.
+    neg = _remote_neg_cache.get(token)
+    if neg and neg > now:
+        raise AuthError("invalid token", reason="token_rejected")
     base = settings.supabase_url.rstrip("/")
     if not base or not settings.supabase_anon_key:
         raise AuthError("jwt mode needs SCRIBE_JWT_SECRET, or SCRIBE_SUPABASE_URL + "
                         "SCRIBE_SUPABASE_ANON_KEY for remote verification",
                         severity="error", reason="auth_misconfigured")
+    # Circuit breaker: bound how many live verify calls we make per window so unique-token
+    # sprays can't turn us into an amplifier against Supabase. Over the cap → fail closed.
+    _remote_call_times[:] = [t for t in _remote_call_times if t > now - _REMOTE_CALL_WINDOW_S]
+    if len(_remote_call_times) >= _REMOTE_MAX_CALLS:
+        logger.error("auth: remote-verify breaker OPEN (%d calls/%ds) — rejecting until it drains",
+                     _REMOTE_MAX_CALLS, _REMOTE_CALL_WINDOW_S)
+        raise AuthError("token verification temporarily unavailable",
+                        severity="error", reason="verify_throttled")
+    _remote_call_times.append(now)
     t0 = time.perf_counter()
     req = urllib.request.Request(
         f"{base}/auth/v1/user",
@@ -97,6 +123,10 @@ def _verify_remote(token: str, settings: Settings) -> dict:
             user = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:  # 401/403 → token rejected by Supabase (routine)
         logger.warning("auth: remote verify rejected token (HTTP %s)", exc.code)
+        if len(_remote_neg_cache) > 4096:  # bound the negative cache
+            for k in [k for k, v in list(_remote_neg_cache.items()) if v <= now][:512]:
+                _remote_neg_cache.pop(k, None)
+        _remote_neg_cache[token] = now + _REMOTE_NEG_TTL_S
         raise AuthError(f"invalid token: {exc.code}", reason="token_rejected") from exc
     except Exception as exc:  # network/timeout — an OPERATIONAL problem; fail closed + alert
         logger.error("auth: remote verify UNAVAILABLE (%s) — is Supabase reachable?", exc)

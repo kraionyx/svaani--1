@@ -62,6 +62,14 @@ def collect_problems(settings: Settings) -> list[str]:
             "to your real frontend origin(s)."
         )
 
+    # 4b. Wildcard CORS with credentials enabled lets ANY website make authenticated calls
+    #     (the app always sends allow_credentials=True). Never allow '*' in production.
+    if any(o == "*" for o in settings.cors_origins):
+        problems.append(
+            "cors_allow_origins contains '*' while credentials are allowed — any origin "
+            "could make authenticated requests. List explicit frontend origin(s)."
+        )
+
     if settings.debug:
         problems.append(
             "debug is True — this exposes full tracebacks to clients. Set SCRIBE_DEBUG=False."
@@ -70,8 +78,36 @@ def collect_problems(settings: Settings) -> list[str]:
     return problems
 
 
+def collect_recommendations(settings: Settings) -> list[str]:
+    """Return hardening recommendations that are WARN-only (never block the boot).
+
+    These are safe-but-suboptimal settings — flagged so an operator notices, but not
+    enforced because making them mandatory could lock out a valid setup.
+    """
+    recs: list[str] = []
+    if settings.auth_mode == "jwt":
+        # Without a verified audience, a token minted for a different project/audience that
+        # happens to share the signing material would still validate. Supabase access tokens
+        # carry aud="authenticated".
+        if not settings.jwt_audience:
+            recs.append(
+                "auth_mode='jwt' but SCRIBE_JWT_AUDIENCE is unset — the 'aud' claim is not "
+                "verified. Set SCRIBE_JWT_AUDIENCE=authenticated for Supabase."
+            )
+        # No local secret/JWKS forces a remote Supabase round-trip per uncached token.
+        if not (settings.jwt_secret or settings.jwt_jwks_url):
+            recs.append(
+                "auth_mode='jwt' verifies tokens by calling Supabase per uncached token "
+                "(slower, and an availability dependency). Set SCRIBE_JWT_SECRET to verify locally."
+            )
+    return recs
+
+
 def validate_production(settings: Settings) -> None:
     """Block an unsafe production boot; warn (don't block) in development."""
+    for rec in collect_recommendations(settings):
+        logger.warning("Hardening recommendation: %s", rec)
+
     problems = collect_problems(settings)
     if not problems:
         return

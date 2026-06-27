@@ -21,6 +21,31 @@ from app.schemas.session import ConsultationSession
 
 _TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 
+# Defense-in-depth for the one place raw HTML is trusted: the hospital DocumentTemplate body
+# and doctor-edited document HTML. Placeholder VALUES are already HTML-escaped, but the
+# template/edit author's markup is rendered as-is — a prescription never needs scripting, so
+# we strip active content. Regex sanitization isn't a full HTML parser, but for this narrow,
+# privileged, script-free document surface it removes the realistic XSS vectors.
+_SCRIPT_RE = re.compile(r"<\s*(script|iframe|object|embed|link|meta|base)\b[^>]*>.*?<\s*/\s*\1\s*>",
+                        re.IGNORECASE | re.DOTALL)
+_VOID_TAG_RE = re.compile(r"<\s*(script|iframe|object|embed|link|meta|base)\b[^>]*/?>",
+                          re.IGNORECASE)
+_ON_ATTR_RE = re.compile(r"\son\w+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", re.IGNORECASE)
+_JS_URI_RE = re.compile(r"(href|src|xlink:href)\s*=\s*(\"|')?\s*javascript:[^\"'>\s]*",
+                        re.IGNORECASE)
+
+
+def sanitize_html(raw: str | None) -> str:
+    """Strip active content (scripts, frames, event handlers, javascript: URLs) from
+    trusted-but-author-supplied document HTML. Layout/markup is preserved."""
+    if not raw:
+        return ""
+    cleaned = _SCRIPT_RE.sub("", raw)
+    cleaned = _VOID_TAG_RE.sub("", cleaned)
+    cleaned = _ON_ATTR_RE.sub("", cleaned)
+    cleaned = _JS_URI_RE.sub(lambda m: f"{m.group(1)}=", cleaned)
+    return cleaned
+
 
 def _esc(value: Any) -> str:
     return html.escape("" if value is None else str(value))
@@ -128,8 +153,12 @@ def build_context(session: ConsultationSession, branding: dict | None = None) ->
 
 
 def render_document(template: DocumentTemplate, context: dict[str, str]) -> str:
-    """Substitute ``{{key}}`` tokens in the template HTML; wrap with its CSS."""
+    """Substitute ``{{key}}`` tokens in the template HTML; wrap with its CSS.
+
+    The author-supplied template body is sanitized (scripts/handlers/js: URLs removed) as
+    defense-in-depth; placeholder values were already HTML-escaped during context build."""
     body = _TOKEN_RE.sub(lambda m: context.get(m.group(1), ""), template.html)
+    body = sanitize_html(body)
     style = f"<style>{template.css}</style>" if template.css else ""
     return f"{style}\n{body}"
 

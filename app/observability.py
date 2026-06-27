@@ -51,7 +51,12 @@ def _apply_security_headers(response: Response, settings: Settings) -> None:
     response.headers.setdefault("X-XSS-Protection", "0")
     response.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:;"
+        # No 'unsafe-eval' — a production Vite/React build doesn't need runtime eval, and
+        # allowing it neuters a large class of XSS protection. 'unsafe-inline' is retained for
+        # script/style because the bundled SPA still ships an inline bootstrap; tighten to
+        # nonces if/when the build emits them.
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; connect-src 'self' ws: wss:;"
     )
     # HSTS only outside development (it pins clients to HTTPS for a year — never on http).
     if settings.is_production:
