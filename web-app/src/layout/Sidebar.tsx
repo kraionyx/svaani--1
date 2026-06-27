@@ -24,7 +24,7 @@ import {
 
 export function Sidebar() {
   const role = useEffectiveRole();
-  const { toggleSidebar, state } = useSidebar();
+  const { toggleSidebar } = useSidebar();
 
   const NAV = [
     { to: '/dashboard', label: 'Scribe Console', icon: Activity },
