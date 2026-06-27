@@ -55,8 +55,20 @@ def _apply_security_headers(response: Response, settings: Settings) -> None:
         # allowing it neuters a large class of XSS protection. 'unsafe-inline' is retained for
         # script/style because the bundled SPA still ships an inline bootstrap; tighten to
         # nonces if/when the build emits them.
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; connect-src 'self' ws: wss:;"
+        "default-src 'self'; "
+        # Cloudflare auto-injects its analytics beacon on tunneled sites.
+        "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; "
+        # Google Fonts stylesheet + the font files it references.
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        # Login background (unsplash) + Google account avatars; images can't execute.
+        "img-src 'self' data: https:; "
+        # CRITICAL: the browser talks to Supabase Auth directly (token verify, OAuth user
+        # lookup, realtime). Without the Supabase origins here the CSP blocks /auth/v1/user
+        # and login silently fails after the OAuth redirect. ws:/wss: keep the consult socket.
+        "connect-src 'self' ws: wss: https://*.supabase.co wss://*.supabase.co; "
+        # Google's OAuth screens (defensive — the redirect flow rarely iframes, One Tap does).
+        "frame-src 'self' https://accounts.google.com;"
     )
     # HSTS only outside development (it pins clients to HTTPS for a year — never on http).
     if settings.is_production:

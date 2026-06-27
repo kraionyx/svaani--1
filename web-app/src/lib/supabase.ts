@@ -35,7 +35,15 @@ export function initSupabase(cfg: AuthConfig): SupabaseClient | null {
   if (_client) return _client;
   if (!cfg.supabase_url || !cfg.supabase_anon_key) return null;
   _client = createClient(cfg.supabase_url, cfg.supabase_anon_key, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      // PKCE: the OAuth redirect returns a short, single-use ?code= instead of the full
+      // access/refresh tokens in the URL hash. The browser exchanges that code for the
+      // session privately, so JWTs never appear in the URL or browser history.
+      flowType: 'pkce',
+    },
   });
   return _client;
 }
