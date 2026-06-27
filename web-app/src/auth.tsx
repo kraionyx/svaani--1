@@ -28,16 +28,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const sb = getSupabase();
-    // onAuthStateChange fires INITIAL_SESSION immediately (Supabase v2), which already
-    // includes any session resolved from the OAuth callback URL. Using getSession()
-    // alongside it creates a race: getSession() can resolve with null before the URL
-    // hash/code is processed, setting loading=false and flashing the login page.
+    let active = true;
+    // Source of truth on first load: getSession() AWAITS supabase's internal init, which
+    // includes detectSessionInUrl — i.e. it parses the OAuth redirect's #access_token /
+    // ?code BEFORE resolving. Relying only on onAuthStateChange's INITIAL_SESSION event is
+    // a timing assumption that fails on the production build (the event can fire with null
+    // before the URL is processed → user bounced back to login despite a valid token in the
+    // hash). getSession() is the canonical, redirect-safe way to pick that session up.
+    sb.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setSession(data.session);
+      setAuthToken(data.session?.access_token ?? null);
+      setLoading(false);
+    });
+    // Keep listening for later changes (token refresh, sign-out, sign-in in another tab).
     const { data: sub } = sb.auth.onAuthStateChange((_event, s) => {
       setSession(s);
       setAuthToken(s?.access_token ?? null);
       setLoading(false);
     });
-    return () => sub.subscription.unsubscribe();
+    return () => { active = false; sub.subscription.unsubscribe(); };
   }, []);
 
   const signOut = async () => {
