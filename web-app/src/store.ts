@@ -35,6 +35,7 @@ interface AppState {
   confidenceReasons: string[];
   modeNotice: { from: string; to: string; reason: string; est_delay_s: number[] } | null;
   reviewSubmitted: boolean;
+  isReviewModalOpen: boolean;
 
   history: import('./api').SessionSummary[];
 
@@ -78,6 +79,7 @@ export const useStore = create<AppState>((set) => ({
   confidenceReasons: [],
   modeNotice: null,
   reviewSubmitted: false,
+  isReviewModalOpen: false,
   history: [],
 
   set: (p) => set(p),
@@ -86,6 +88,7 @@ export const useStore = create<AppState>((set) => ({
     liveNote: {}, liveNoteOrder: [], note: null, extraction: null, risk: null,
     grounding: null, raw: null, clean: null,
     confidenceBand: null, confidenceReasons: [], modeNotice: null, reviewSubmitted: false,
+    isReviewModalOpen: false,
   }),
   addSegment: (s) => set((st) => {
     if (s.final) {

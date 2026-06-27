@@ -15,10 +15,9 @@ import { RiskPanel } from '../components/RiskPanel';
 import { ExtractionEditor } from '../components/ExtractionEditor';
 import { GroundingPanel } from '../components/GroundingPanel';
 import { TranscriptView } from '../components/TranscriptView';
-import { SignOff } from '../components/SignOff';
 import { NoticeBanner } from '../components/NoticeBanner';
 import { SpeakerTimeline } from '../components/SpeakerTimeline';
-import { ReviewPrompt } from '../components/ReviewPrompt';
+import { ReviewModal } from '../components/ReviewModal';
 import { PrescriptionPreview } from '../components/PrescriptionPreview';
 import { AdminDashboard } from '../components/AdminDashboard';
 
@@ -141,6 +140,9 @@ export function ScribeWorkspace() {
 
   if (!s.sessionId && !live) {
     const greetingName = session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || 'Doctor';
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? 'Good morning Dr' : hour < 17 ? 'Good afternoon Dr' : hour < 21 ? 'Good evening Dr' : 'Good night Dr';
+
     return (
       <>
         <NoticeBanner notice={s.modeNotice} onDismiss={() => s.set({ modeNotice: null })} />
@@ -151,7 +153,7 @@ export function ScribeWorkspace() {
           
           <div className="flex flex-col items-center justify-center w-full max-w-4xl mx-auto px-6 animate-in fade-in zoom-in-95 duration-500 z-10 pb-12">
             <h1 className="text-[2.5rem] text-slate-800 font-semibold mb-12 tracking-tight">
-              Good morning, <span className="text-slate-500">{greetingName}</span>
+              {greeting}, <span className="text-slate-500">{greetingName}</span>
             </h1>
             <Recorder variant="center" {...recorderProps} />
           </div>
@@ -164,24 +166,25 @@ export function ScribeWorkspace() {
     <div className="flex flex-col h-full w-full bg-[#eef1f7]">
       <NoticeBanner notice={s.modeNotice} onDismiss={() => s.set({ modeNotice: null })} />
 
-      <main className="flex flex-1 overflow-hidden animate-in fade-in duration-500">
-        <aside className="w-[320px] bg-white border-r border-slate-200/60 p-5 flex flex-col gap-6 overflow-y-auto hidden-scrollbar shrink-0 z-10 shadow-[2px_0_10px_-4px_rgba(0,0,0,0.05)]">
-          <Recorder variant="sidebar" {...recorderProps} />
-          {s.sessionId && (
-            <SignOff
-              state={s.reviewState} hasNote={!!s.note} signOpen={signOpen}
-              onTransition={doTransition} onOpenSign={() => setSignOpen(true)} onCloseSign={() => setSignOpen(false)}
-              onExport={downloadExport}
-            />
-          )}
-          {s.sessionId && !s.reviewSubmitted && s.reviewState && !['listening', 'processing'].includes(s.reviewState) && (
-            <ReviewPrompt sessionId={s.sessionId} onSubmit={() => s.set({ reviewSubmitted: true })} />
-          )}
-        </aside>
-
+      <main className="flex flex-1 overflow-hidden animate-in fade-in duration-500 relative">
         <section className="flex-1 flex flex-col overflow-y-auto hidden-scrollbar relative p-6 pt-0">
-          <Tabs active={s.activeTab} onTab={(t) => s.set({ activeTab: t })} role={s.role} />
-          <div className="tabbody max-w-4xl mx-auto w-full">
+          <Tabs 
+            active={s.activeTab} 
+            onTab={(t) => s.set({ activeTab: t })} 
+            role={s.role} 
+            rightAction={
+              s.sessionId && !s.reviewSubmitted && s.reviewState && !['listening', 'processing'].includes(s.reviewState) ? (
+                <button
+                  onClick={() => s.set({ isReviewModalOpen: true })}
+                  className="bg-sky-600 hover:bg-sky-700 text-white font-medium py-1.5 px-4 rounded-full text-sm shadow-sm transition-all flex items-center gap-2 active:scale-95"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                  Review & Sign-off
+                </button>
+              ) : null
+            }
+          />
+          <div className="tabbody max-w-4xl mx-auto w-full pb-32">
             {s.activeTab === 'note' && <NoteView />}
             {s.activeTab === 'risk' && <RiskPanel />}
             {s.activeTab === 'extraction' && <ExtractionEditor />}
@@ -192,7 +195,22 @@ export function ScribeWorkspace() {
             {s.activeTab === 'admin' && <AdminDashboard />}
           </div>
         </section>
+
+        {live && (
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-8 fade-in duration-300">
+            <Recorder variant="floating" {...recorderProps} />
+          </div>
+        )}
       </main>
+
+      <ReviewModal 
+        isOpen={s.isReviewModalOpen} 
+        onClose={() => s.set({ isReviewModalOpen: false })}
+        sessionId={s.sessionId!}
+        reviewState={s.reviewState}
+        onTransition={doTransition}
+        onExport={downloadExport}
+      />
     </div>
   );
 }

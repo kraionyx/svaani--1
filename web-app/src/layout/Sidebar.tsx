@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useEffectiveRole } from '../app/useRole';
 import { useAuth } from '../auth';
 import { useStore } from '../store';
-import { Activity, LayoutDashboard, FileText, Users, Settings, Shield, Menu, Bell, ChevronsUpDown, Sparkles, BadgeCheck, CreditCard, LogOut } from 'lucide-react';
+import { Activity, LayoutDashboard, FileText, Users, Settings, Shield, PanelLeft, Bell, ChevronsUpDown, Sparkles, BadgeCheck, CreditCard, LogOut } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   Sidebar as ShadcnSidebar,
@@ -60,13 +60,23 @@ export function Sidebar() {
 
   return (
     <ShadcnSidebar collapsible="icon" className="border-r-0 shadow-[4px_0_24px_rgba(0,0,0,0.02)] bg-white font-sans text-slate-700 z-40">
-      <SidebarHeader className="pt-4 px-4">
-        <div className="flex items-center justify-between group-data-[collapsible=icon]:justify-center mb-2">
-          <div className="font-bold text-2xl text-slate-800 tracking-tight group-data-[collapsible=icon]:hidden">
-            Svaani<span className="text-sky-500">.</span>
+      <SidebarHeader className="pt-4 px-6 group-data-[collapsible=icon]:px-0">
+        <div className="flex items-center justify-between group-data-[collapsible=icon]:justify-center mb-2 group/logo relative h-10 w-full">
+          <div className="font-bold text-2xl text-slate-800 tracking-tight transition-all group-data-[collapsible=icon]:group-hover/logo:opacity-0 group-data-[collapsible=icon]:group-hover/logo:scale-95 duration-200 flex items-center justify-center">
+            <div className="group-data-[collapsible=icon]:hidden flex items-baseline">
+              Svaani<span className="text-sky-500">.</span>
+            </div>
+            <div className="hidden group-data-[collapsible=icon]:flex relative items-baseline">
+              <span className="text-[32px] text-slate-700 leading-none">S</span>
+              <span className="text-sky-500 text-3xl absolute -right-2.5 bottom-0 leading-none">.</span>
+            </div>
           </div>
-          <button type="button" onClick={toggleSidebar} className="p-2 rounded-xl hover:bg-slate-50 text-slate-400 hover:text-slate-600 transition-colors">
-            <Menu size={22} strokeWidth={2.5} />
+          <button 
+            type="button" 
+            onClick={toggleSidebar} 
+            className="p-2 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-all duration-200 group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:left-1/2 group-data-[collapsible=icon]:top-1/2 group-data-[collapsible=icon]:-translate-x-1/2 group-data-[collapsible=icon]:-translate-y-1/2 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:group-hover/logo:opacity-100 group-data-[collapsible=icon]:scale-75 group-data-[collapsible=icon]:group-hover/logo:scale-100 cursor-pointer"
+          >
+            <PanelLeft size={22} strokeWidth={2.5} />
           </button>
         </div>
       </SidebarHeader>
@@ -74,12 +84,9 @@ export function Sidebar() {
       <SidebarContent className="flex-1 overflow-y-auto hidden-scrollbar p-3 group-data-[collapsible=icon]:px-2">
         {/* Main Section */}
         <div className="mb-4">
-          <div className="text-[10px] font-bold tracking-widest text-slate-400 mb-2 px-3 flex items-center gap-2">
-            <div className="group-data-[collapsible=icon]:hidden flex items-center gap-2 uppercase">
+          <div className="text-[10px] font-bold tracking-widest text-slate-400 mb-2 px-3 flex items-center gap-2 group-data-[collapsible=icon]:hidden">
+            <div className="flex items-center gap-2 uppercase">
               Dashboard
-            </div>
-            <div className="hidden group-data-[collapsible=icon]:block w-full text-center">
-              <Activity size={14} className="mx-auto text-slate-300" />
             </div>
           </div>
 
@@ -90,11 +97,9 @@ export function Sidebar() {
                 <SidebarMenuItem key={n.to}>
                   <Tooltip delayDuration={0}>
                     <TooltipTrigger asChild>
-                      <Link to={n.to} className={`flex items-center gap-3 px-3 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:justify-center py-2.5 rounded-xl transition-all w-full justify-between ${isActive ? 'bg-sky-50 text-sky-700 font-semibold shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800 active:bg-slate-100'}`}>
-                        <div className="flex items-center gap-3 group-data-[collapsible=icon]:gap-0">
-                          <n.icon size={20} strokeWidth={isActive ? 2.5 : 2} className={isActive ? "text-sky-600" : "text-slate-400"} />
-                          <span className="text-[14px] group-data-[collapsible=icon]:hidden">{n.label}</span>
-                        </div>
+                      <Link to={n.to} className={`flex items-center gap-3 px-3 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:justify-center py-2.5 rounded-xl transition-all w-full justify-start ${isActive ? 'bg-sky-50 text-sky-700 font-semibold shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800 active:bg-slate-100'}`}>
+                        <n.icon size={20} strokeWidth={isActive ? 2.5 : 2} className={`shrink-0 ${isActive ? "text-sky-600" : "text-slate-400"}`} />
+                        <span className="text-[14px] font-medium group-data-[collapsible=icon]:hidden truncate">{n.label}</span>
                       </Link>
                     </TooltipTrigger>
                     <TooltipContent side="right" className="group-data-[state=expanded]:hidden bg-slate-800 text-white font-medium px-2 py-1 text-xs">
@@ -151,8 +156,8 @@ export function Sidebar() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <div className="border border-slate-200 bg-slate-50/70 rounded-full p-2 group-data-[collapsible=icon]:p-0 flex items-center justify-between cursor-pointer hover:bg-slate-100 hover:shadow-sm transition-all group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:border-transparent group-data-[collapsible=icon]:shadow-none group-data-[collapsible=icon]:justify-center">
-              <div className="flex items-center gap-3 group-data-[collapsible=icon]:gap-0 min-w-0">
-                <div className="w-10 h-10 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:h-8 rounded-full overflow-hidden flex-shrink-0 border border-slate-200 shadow-sm bg-white flex items-center justify-center text-sky-600 font-bold uppercase text-lg group-data-[collapsible=icon]:text-sm">
+              <div className="flex items-center gap-3 group-data-[collapsible=icon]:gap-0 min-w-0 w-full">
+                <div className="w-10 h-10 group-data-[collapsible=icon]:w-11 group-data-[collapsible=icon]:h-11 rounded-full overflow-hidden flex-shrink-0 border border-slate-200 shadow-sm bg-white flex items-center justify-center text-sky-600 font-bold uppercase text-lg group-data-[collapsible=icon]:text-xl group-data-[collapsible=icon]:mx-auto">
                   {fullName.charAt(0)}
                 </div>
                 <div className="flex flex-col group-data-[collapsible=icon]:hidden overflow-hidden pr-2 min-w-0 text-left">
