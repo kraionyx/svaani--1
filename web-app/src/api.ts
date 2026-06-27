@@ -4,7 +4,8 @@ export const API_BASE = (() => {
   const p = location.port;
   if (location.protocol === 'file:') return 'http://127.0.0.1:8000';
   if (p === '' || p === '8000') return '';
-  return `${location.protocol}//${location.hostname}:8000`;
+  const host = location.hostname === 'localhost' ? '127.0.0.1' : location.hostname;
+  return `${location.protocol}//${host}:8000`;
 })();
 
 export const WS_BASE = (() => {

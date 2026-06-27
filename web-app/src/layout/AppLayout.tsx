@@ -1,6 +1,3 @@
-// Persistent application shell rendered around every route: top bar, primary nav sidebar,
-// breadcrumb trail, and the routed <Outlet/>. Also owns app-wide concerns lifted out of the
-// old monolith: one-time health/template bootstrap, the toast surface, and the theme studio.
 import { Suspense, useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import * as API from '../api';
@@ -10,6 +7,7 @@ import { ThemeStudio } from '../components/ThemeStudio';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
 import { Breadcrumbs } from './Breadcrumbs';
+import { SidebarProvider } from '@/components/ui/sidebar';
 
 export function AppLayout() {
   const s = useStore();
@@ -28,19 +26,21 @@ export function AppLayout() {
   }, []);
 
   return (
-    <div className="app-shell">
-      <TopBar onOpenStudio={setStudioOpen} />
-      <div className="app-body">
-        <Sidebar />
-        <div className="app-content">
-          <Breadcrumbs />
-          <Suspense fallback={<div className="route-loading"><span className="route-spinner" aria-hidden="true" /> Loading…</div>}>
-            <Outlet />
-          </Suspense>
+    <SidebarProvider>
+      <div className="app-shell w-full h-screen flex flex-col overflow-hidden">
+        <TopBar onOpenStudio={setStudioOpen} />
+        <div className="app-body flex flex-1 overflow-hidden relative">
+          <Sidebar />
+          <div className="app-content flex-1 overflow-auto relative">
+            <Breadcrumbs />
+            <Suspense fallback={<div className="route-loading"><span className="route-spinner" aria-hidden="true" /> Loading…</div>}>
+              <Outlet />
+            </Suspense>
+          </div>
         </div>
+        {studioOpen && <ThemeStudio onClose={() => setStudioOpen(false)} />}
+        {toastMsg && <div className={`toast ${toastMsg.e ? 'err' : ''}`}>{toastMsg.m}</div>}
       </div>
-      {studioOpen && <ThemeStudio onClose={() => setStudioOpen(false)} />}
-      {toastMsg && <div className={`toast ${toastMsg.e ? 'err' : ''}`}>{toastMsg.m}</div>}
-    </div>
+    </SidebarProvider>
   );
 }

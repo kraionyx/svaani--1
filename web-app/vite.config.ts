@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from "path"
 
 // Dev-only: Vite refuses to serve paths outside `base` (/app/). The admin SPA must be
 // reachable at /admin1, so internally rewrite that request to the SPA index. The browser
@@ -31,7 +32,12 @@ export default defineConfig({
   // set the dispatcher on the other read `null` → "Cannot read properties of null (reading
   // 'useState')" and crashed every authenticated load. dedupe + a pinned optimizeDeps entry
   // keep React as one module across the whole graph.
-  resolve: { dedupe: ['react', 'react-dom'] },
+  resolve: { 
+    dedupe: ['react', 'react-dom'],
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
   optimizeDeps: {
     include: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime'],
   },
@@ -40,7 +46,7 @@ export default defineConfig({
     port: 5173,
     allowedHosts: ['svaani.kraionyx.com'],
     proxy: {
-      '/admin1/api': { target: 'http://localhost:8000', changeOrigin: true },
+      '/admin1/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
     },
   },
 });
