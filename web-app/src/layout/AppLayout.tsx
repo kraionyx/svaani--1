@@ -4,7 +4,7 @@ import * as API from '../api';
 import { useStore } from '../store';
 import { onToast, toast } from '../toast';
 import { Sidebar } from './Sidebar';
-import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar';
+import { SidebarProvider, SidebarInset, SidebarTrigger } from '@/components/ui/sidebar';
 
 export function AppLayout() {
   const s = useStore();
@@ -25,7 +25,13 @@ export function AppLayout() {
     <SidebarProvider>
       <Sidebar />
       <SidebarInset className="w-full h-screen flex flex-col overflow-hidden bg-[#eef1f7]">
-        <div className="app-content flex-1 overflow-hidden relative flex flex-col">
+        <div className="md:hidden absolute top-4 left-4 right-4 z-50 flex items-center gap-3">
+          <SidebarTrigger />
+          <div className="font-bold text-[20px] text-slate-800 tracking-tight ml-1">
+            Svaani<span className="text-sky-500">.</span>
+          </div>
+        </div>
+        <div className="app-content flex-1 overflow-hidden relative flex flex-col pt-14 md:pt-0">
           <Suspense fallback={<div className="route-loading"><span className="route-spinner" aria-hidden="true" /> Waking up Svaani…</div>}>
             <Outlet />
           </Suspense>

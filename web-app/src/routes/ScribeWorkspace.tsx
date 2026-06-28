@@ -167,7 +167,7 @@ export function ScribeWorkspace() {
       <NoticeBanner notice={s.modeNotice} onDismiss={() => s.set({ modeNotice: null })} />
 
       <main className="flex flex-1 overflow-hidden animate-in fade-in duration-500 relative">
-        <section className="flex-1 flex flex-col overflow-y-auto hidden-scrollbar relative p-6 pt-0">
+        <section className="flex-1 flex flex-col overflow-y-auto hidden-scrollbar relative p-4 md:p-6 pt-0">
           <Tabs 
             active={s.activeTab} 
             onTab={(t) => s.set({ activeTab: t })} 
