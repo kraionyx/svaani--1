@@ -47,7 +47,7 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 
 // Minimal full-screen splash while we resolve auth config / session.
-function Splash({ label = 'Loading…' }: { label?: string }) {
+function Splash({ label = 'Waking up Svaani…' }: { label?: string }) {
   return (
     <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg)', color: 'var(--muted)' }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>

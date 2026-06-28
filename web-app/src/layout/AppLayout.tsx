@@ -26,7 +26,7 @@ export function AppLayout() {
       <Sidebar />
       <SidebarInset className="w-full h-screen flex flex-col overflow-hidden bg-[#eef1f7]">
         <div className="app-content flex-1 overflow-hidden relative flex flex-col">
-          <Suspense fallback={<div className="route-loading"><span className="route-spinner" aria-hidden="true" /> Loading…</div>}>
+          <Suspense fallback={<div className="route-loading"><span className="route-spinner" aria-hidden="true" /> Waking up Svaani…</div>}>
             <Outlet />
           </Suspense>
         </div>

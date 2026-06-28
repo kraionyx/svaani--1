@@ -168,50 +168,16 @@ export function Sidebar() {
               <ChevronsUpDown size={16} className="text-slate-600 mr-2 flex-shrink-0 group-data-[collapsible=icon]:hidden" />
             </div>
           </DropdownMenuTrigger>
-          <DropdownMenuContent className="w-72 mb-2 rounded-xl bg-white shadow-lg border border-slate-200" align="end" side="right" sideOffset={8}>
+          <DropdownMenuContent className="w-72 mb-2 rounded-xl bg-white shadow-lg border border-slate-200" align="center" side="top" sideOffset={12}>
             <DropdownMenuLabel className="p-0 font-normal">
-              <div className="flex items-center gap-3 px-2 py-2 text-left text-sm">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sky-700 font-bold uppercase text-lg">
-                  {fullName.charAt(0)}
-                </div>
-                <div className="grid flex-1 text-left text-sm leading-tight min-w-0">
-                  <span className="truncate font-semibold text-slate-800">{fullName}</span>
-                  <span className="truncate text-xs text-slate-500">{email}</span>
-                </div>
-              </div>
+              
             </DropdownMenuLabel>
-            <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem className="cursor-pointer rounded-lg">
-                <Sparkles className="mr-2 h-4 w-4" />
-                <span>Upgrade to Pro</span>
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuItem asChild className="cursor-pointer rounded-lg">
-                <Link to="/profile" className="flex items-center w-full">
-                  <Users className="mr-2 h-4 w-4" />
-                  <span>Profile</span>
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem className="cursor-pointer rounded-lg">
-                <BadgeCheck className="mr-2 h-4 w-4" />
-                <span>Account</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem className="cursor-pointer rounded-lg">
-                <CreditCard className="mr-2 h-4 w-4" />
-                <span>Billing</span>
-              </DropdownMenuItem>
               <DropdownMenuItem asChild className="cursor-pointer rounded-lg">
                 <Link to="/settings" className="flex items-center w-full">
                   <Settings className="mr-2 h-4 w-4" />
                   <span>Settings</span>
                 </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem className="cursor-pointer rounded-lg">
-                <Bell className="mr-2 h-4 w-4" />
-                <span>Notifications</span>
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
