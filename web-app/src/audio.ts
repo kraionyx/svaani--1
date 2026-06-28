@@ -15,13 +15,33 @@ export function micSupported(): boolean {
   return !!(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 }
 
+function clampToPcm16(s: number): number {
+  s = Math.max(-1, Math.min(1, s));
+  return s < 0 ? s * 0x8000 : s * 0x7fff;
+}
+
 function floatTo16k(float: Float32Array, inRate: number): Int16Array {
+  // Fast path: the AudioContext is already running at 16 kHz (the browser's high-quality
+  // resampler did the work), so this is a straight float → PCM16 conversion with no
+  // resampling and therefore no aliasing.
+  if (inRate === TARGET_RATE) {
+    const out = new Int16Array(float.length);
+    for (let i = 0; i < float.length; i++) out[i] = clampToPcm16(float[i]);
+    return out;
+  }
+  // Fallback (a browser that ignored the 16 kHz hint, e.g. older Safari): average each
+  // source window instead of picking every Nth sample. A box average is a crude low-pass
+  // that suppresses the alias noise the old nearest-neighbour decimation folded into the
+  // speech band — degraded STT accuracy was traced to that aliasing.
   const ratio = inRate / TARGET_RATE;
   const outLen = Math.floor(float.length / ratio);
   const out = new Int16Array(outLen);
   for (let i = 0; i < outLen; i++) {
-    const s = Math.max(-1, Math.min(1, float[Math.floor(i * ratio)]));
-    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    const start = Math.floor(i * ratio);
+    const end = Math.min(float.length, Math.floor((i + 1) * ratio));
+    let sum = 0, n = 0;
+    for (let j = start; j < end; j++) { sum += float[j]; n++; }
+    out[i] = clampToPcm16(n ? sum / n : 0);
   }
   return out;
 }
@@ -34,7 +54,14 @@ export async function startMic(onChunk: (pcm: Int16Array) => void): Promise<MicH
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   });
-  const ctx = new AudioContext();
+  // Ask the browser to run the graph at 16 kHz so its high-quality resampler handles the
+  // 48k→16k conversion (Sarvam needs 16 kHz mono PCM16). This replaces the old approach of
+  // running at the hardware rate (~48 kHz) and naively decimating 3:1 — that folded
+  // high-frequency energy back into the speech band as aliasing noise and hurt STT accuracy.
+  // Most current browsers honour the hint; if one doesn't, floatTo16k() average-decimates.
+  let ctx: AudioContext;
+  try { ctx = new AudioContext({ sampleRate: TARGET_RATE }); }
+  catch { ctx = new AudioContext(); }
   if (ctx.state === 'suspended') await ctx.resume();
   const src = ctx.createMediaStreamSource(stream);
   const analyser = ctx.createAnalyser(); analyser.fftSize = 256; src.connect(analyser);

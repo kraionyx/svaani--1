@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useEffectiveRole } from '../app/useRole';
 import { useAuth } from '../auth';
 import { useStore } from '../store';
-import { Activity, LayoutDashboard, FileText, Users, Settings, Shield, PanelLeft, Bell, ChevronsUpDown, Sparkles, BadgeCheck, CreditCard, LogOut } from 'lucide-react';
+import { Activity, LayoutDashboard, FileText, Users, Settings, Shield, PanelLeft, Bell, ChevronsUpDown, Sparkles, BadgeCheck, CreditCard, LogOut, Plus } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   Sidebar as ShadcnSidebar,
@@ -39,6 +39,15 @@ export function Sidebar() {
   const { toggleSidebar } = useSidebar();
   const { session, signOut } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // Explicitly request a new consultation. The Scribe workspace owns the live socket/mic,
+  // so we just raise the flag and route to the console — the workspace decides whether it can
+  // start fresh immediately or must first confirm interrupting an active consult.
+  const startNewConsultation = () => {
+    s.set({ newConsultRequested: true });
+    navigate('/dashboard');
+  };
 
   const user = session?.user;
   const fullName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Unknown User';
@@ -82,6 +91,25 @@ export function Sidebar() {
       </SidebarHeader>
 
       <SidebarContent className="flex-1 overflow-y-auto hidden-scrollbar p-3 group-data-[collapsible=icon]:px-2">
+        {/* New Consultation — primary action, always visible */}
+        <div className="mb-4">
+          <Tooltip delayDuration={0}>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={startNewConsultation}
+                className="flex items-center gap-2.5 w-full justify-center px-3 group-data-[collapsible=icon]:px-0 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold shadow-sm shadow-sky-500/20 transition-all active:scale-[0.98]"
+              >
+                <Plus size={20} strokeWidth={2.5} className="shrink-0" />
+                <span className="text-[14px] group-data-[collapsible=icon]:hidden">New Consultation</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="group-data-[state=expanded]:hidden bg-slate-800 text-white font-medium px-2 py-1 text-xs">
+              New Consultation
+            </TooltipContent>
+          </Tooltip>
+        </div>
+
         {/* Main Section */}
         <div className="mb-4">
           <div className="text-[10px] font-bold tracking-widest text-slate-400 mb-2 px-3 flex items-center gap-2 group-data-[collapsible=icon]:hidden">

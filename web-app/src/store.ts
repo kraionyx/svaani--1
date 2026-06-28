@@ -37,6 +37,12 @@ interface AppState {
   reviewSubmitted: boolean;
   isReviewModalOpen: boolean;
 
+  // Set true when "New Consultation" is clicked anywhere (e.g. the sidebar). The Scribe
+  // workspace owns the WS socket + mic, so it consumes this flag (and clears it) to run the
+  // guarded new-consultation flow — opening a confirmation when an active consult would be
+  // interrupted, or starting fresh immediately when it's safe.
+  newConsultRequested: boolean;
+
   history: import('./api').SessionSummary[];
 
   set: (p: Partial<AppState>) => void;
@@ -80,6 +86,7 @@ export const useStore = create<AppState>((set) => ({
   modeNotice: null,
   reviewSubmitted: false,
   isReviewModalOpen: false,
+  newConsultRequested: false,
   history: [],
 
   set: (p) => set(p),

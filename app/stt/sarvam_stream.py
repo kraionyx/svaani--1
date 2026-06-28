@@ -39,8 +39,14 @@ async def open_stream(settings: Settings) -> AsyncIterator[Any]:
 
     client = AsyncSarvamAI(api_subscription_key=settings.sarvam_api_key)
     mode = settings.sarvam_mode if settings.sarvam_mode in _STREAMING_MODES else "translate"
+    # Honour SCRIBE_SARVAM_LANGUAGE_CODE. The default ("unknown") keeps per-utterance
+    # auto-detect, but auto-detect re-runs on every short utterance and easily confuses
+    # acoustically similar languages (e.g. Telugu↔Tamil) — the source of spurious
+    # third-language words. Pinning the spoken language (e.g. "te-IN") removes that
+    # misdetection. Previously this was hardcoded to "unknown" and the setting was ignored.
+    lang = settings.sarvam_language_code or "unknown"
     async with client.speech_to_text_streaming.connect(
-        language_code="unknown",            # auto-detect (Sarvam outputs English in translate mode)
+        language_code=lang,                 # 'unknown' → auto-detect; pin (e.g. 'te-IN') to stop drift
         model=settings.sarvam_streaming_model,
         mode=mode,
         input_audio_codec="pcm_s16le",      # raw 16-bit little-endian PCM frames
