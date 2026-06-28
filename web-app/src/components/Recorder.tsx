@@ -120,27 +120,27 @@ export function Recorder(p: Props) {
   if (p.variant === 'center') {
     return (
       <div className="flex flex-col items-center w-full transition-all duration-700 ease-in-out transform opacity-100 scale-100">
-        <div className="flex items-center bg-white shadow-lg shadow-sky-900/5 rounded-[2rem] border border-slate-200/60 p-2.5 w-full max-w-3xl gap-3">
+        <div className="flex flex-row items-center w-full max-w-3xl bg-white rounded-full shadow-sm border border-slate-200 p-1 md:p-1.5 pl-2 md:pl-4 transition-all">
           
-          <div className="relative flex-1 flex">
+          <div className="relative flex-1 flex border-r border-slate-100">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
                   disabled={p.busy}
-                  className="relative flex items-center justify-between bg-slate-50 border border-slate-200 hover:border-sky-200 rounded-full pl-5 pr-4 py-3.5 text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-100 focus:bg-white w-full cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
+                  className="relative flex items-center justify-between hover:bg-slate-50/80 rounded-full px-2 md:px-4 py-2.5 md:py-3.5 text-[12px] md:text-sm font-medium text-slate-700 focus:outline-none w-full cursor-pointer transition-colors disabled:opacity-50 text-left"
                 >
-                  <span className="truncate pr-4">{p.templates.find(t => t.template_id === p.templateId)?.name || 'Select Template'}</span>
+                  <span className="truncate pr-1 md:pr-4">{p.templates.find(t => t.template_id === p.templateId)?.name || 'Select Template'}</span>
                   <div className="text-slate-400 shrink-0">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                    <svg width="14" height="14" className="md:w-4 md:h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
                   </div>
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[200px]" align="start" sideOffset={8}>
+              <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[160px] md:min-w-[200px]" align="start" sideOffset={8}>
                 {p.templates.map((t) => (
                   <DropdownMenuItem 
                     key={t.template_id} 
                     onClick={() => p.onTemplate(t.template_id)}
-                    className={`cursor-pointer py-2 px-3 text-[14px] hover:text-sky-600 hover:bg-sky-50 focus:text-sky-600 focus:bg-sky-50 transition-colors ${
+                    className={`cursor-pointer py-2 px-3 text-[13px] md:text-[14px] hover:text-sky-600 hover:bg-sky-50 focus:text-sky-600 focus:bg-sky-50 transition-colors ${
                       t.template_id === p.templateId ? "text-sky-600 bg-sky-50/50 font-medium" : "text-slate-700"
                     }`}
                   >
@@ -156,20 +156,20 @@ export function Recorder(p: Props) {
               <DropdownMenuTrigger asChild>
                 <button
                   disabled={p.recording || p.busy}
-                  className="relative flex items-center justify-between bg-slate-50 border border-slate-200 hover:border-sky-200 rounded-full pl-5 pr-4 py-3.5 text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-100 focus:bg-white w-full cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
+                  className="relative flex items-center justify-between hover:bg-slate-50/80 rounded-full px-2 md:px-4 py-2.5 md:py-3.5 text-[12px] md:text-sm font-medium text-slate-700 focus:outline-none w-full cursor-pointer transition-colors disabled:opacity-50 text-left"
                 >
-                  <span className="truncate pr-4">{MODE_OPTIONS.find(m => m.id === p.modeChoice)?.label} Mode</span>
+                  <span className="truncate pr-1 md:pr-4">{MODE_OPTIONS.find(m => m.id === p.modeChoice)?.label} Mode</span>
                   <div className="text-slate-400 shrink-0">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                    <svg width="14" height="14" className="md:w-4 md:h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
                   </div>
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[160px]" align="start" sideOffset={8}>
+              <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[140px] md:min-w-[160px]" align="start" sideOffset={8}>
                 {MODE_OPTIONS.map((m) => (
                   <DropdownMenuItem 
                     key={m.id} 
                     onClick={() => p.onModeChoice(m.id)}
-                    className={`cursor-pointer py-2 px-3 text-[14px] hover:text-sky-600 hover:bg-sky-50 focus:text-sky-600 focus:bg-sky-50 transition-colors ${
+                    className={`cursor-pointer py-2 px-3 text-[13px] md:text-[14px] hover:text-sky-600 hover:bg-sky-50 focus:text-sky-600 focus:bg-sky-50 transition-colors ${
                       m.id === p.modeChoice ? "text-sky-600 bg-sky-50/50 font-medium" : "text-slate-700"
                     }`}
                   >
@@ -180,14 +180,16 @@ export function Recorder(p: Props) {
             </DropdownMenu>
           </div>
 
-          <button 
-            className="w-14 h-14 rounded-full flex items-center justify-center transition-all shadow-md shadow-sky-500/20 flex-shrink-0 bg-sky-500 hover:bg-sky-600 hover:scale-105 active:scale-95 text-white"
-            onClick={p.onRecord} 
-            disabled={p.busy && !p.recording}
-            title="Start consultation"
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>
-          </button>
+          <div className="flex-shrink-0 ml-1">
+            <button 
+              className="w-10 h-10 md:w-14 md:h-14 rounded-full flex items-center justify-center transition-all shadow-md shadow-sky-500/20 bg-sky-500 hover:bg-sky-600 hover:scale-105 active:scale-95 text-white"
+              onClick={p.onRecord} 
+              disabled={p.busy && !p.recording}
+              title="Start consultation"
+            >
+              <svg width="18" height="18" className="md:w-[22px] md:h-[22px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-6 mt-6 opacity-70">
@@ -208,14 +210,17 @@ export function Recorder(p: Props) {
   if (p.variant === 'floating') {
     return (
       <div className="flex flex-col items-center gap-3">
+        <div className="w-[160px] h-8 relative opacity-90 -mb-2">
+          <canvas ref={canvasRef} className="w-full h-full block" />
+        </div>
         <div className="bg-white/90 backdrop-blur-sm rounded-full px-4 py-1.5 shadow-sm border border-slate-200 text-xs font-semibold text-slate-600 flex items-center gap-2">
            <div className={`w-2 h-2 rounded-full ${p.paused ? 'bg-amber-400' : 'bg-red-500 animate-pulse'}`}></div>
            {fmtTime(elapsed)} {p.paused ? '(Paused)' : ''}
         </div>
-        <div className="flex items-center gap-3 bg-white/95 backdrop-blur-md shadow-xl shadow-slate-200/50 rounded-full border border-slate-200/60 p-2">
+        <div className="flex items-center gap-4 md:gap-6">
           
           <button 
-            className="w-12 h-12 rounded-full flex items-center justify-center text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors"
+            className="w-12 h-12 md:w-14 md:h-14 rounded-full flex items-center justify-center text-slate-600 bg-white shadow-lg shadow-slate-200/50 hover:bg-slate-50 border border-slate-100 transition-colors"
             onClick={p.onCancel}
             title="Cancel"
           >
@@ -223,7 +228,7 @@ export function Recorder(p: Props) {
           </button>
 
           <button 
-            className="px-6 h-12 rounded-full flex items-center justify-center gap-2 text-white font-semibold shadow-md shadow-red-500/20 bg-gradient-to-r from-red-500 to-rose-500 hover:from-red-400 hover:to-rose-400 transition-all active:scale-[0.98] min-w-[180px]"
+            className="px-6 h-12 md:h-14 rounded-full flex items-center justify-center gap-2 text-white font-semibold shadow-lg shadow-red-500/30 bg-gradient-to-r from-red-500 to-rose-500 hover:from-red-400 hover:to-rose-400 transition-all active:scale-[0.98] min-w-[160px] md:min-w-[180px]"
             onClick={p.onRecord}
             disabled={p.busy && !p.recording}
           >
@@ -231,7 +236,7 @@ export function Recorder(p: Props) {
           </button>
 
           <button 
-            className="w-12 h-12 rounded-full flex items-center justify-center text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors"
+            className="w-12 h-12 md:w-14 md:h-14 rounded-full flex items-center justify-center text-slate-600 bg-white shadow-lg shadow-slate-200/50 hover:bg-slate-50 border border-slate-100 transition-colors"
             onClick={p.onPause}
             title={p.paused ? "Resume" : "Pause"}
           >
