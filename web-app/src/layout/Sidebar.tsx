@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useEffectiveRole } from '../app/useRole';
 import { useAuth } from '../auth';
 import { useStore } from '../store';
-import { Activity, LayoutDashboard, FileText, Users, Settings, Shield, PanelLeft, Bell, ChevronsUpDown, Sparkles, BadgeCheck, CreditCard, LogOut, Plus } from 'lucide-react';
+import { Activity, LayoutDashboard, FileText, Users, Settings, Shield, PanelLeft, ChevronsUpDown, LogOut, Plus } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   Sidebar as ShadcnSidebar,
