@@ -115,9 +115,9 @@ export function SettingsPage() {
   ];
 
   return (
-    <div className="flex h-full w-full bg-[#f8fafc]">
+    <div className="flex flex-col md:flex-row h-full w-full bg-[#f8fafc] overflow-y-auto md:overflow-hidden">
       {/* Settings Sidebar */}
-      <div className="w-64 border-r border-slate-200 p-6 flex flex-col overflow-y-auto bg-white shrink-0">
+      <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-slate-200 p-6 flex flex-col md:overflow-y-auto bg-white shrink-0">
         <h2 className="text-xl font-semibold text-slate-800 mb-6">Settings</h2>
         
         <div className="mb-6">
@@ -154,16 +154,16 @@ export function SettingsPage() {
       </div>
 
       {/* Settings Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-visible md:overflow-y-auto">
         {activeTab === 'account' ? (
-          <div className="flex flex-col h-full max-w-6xl w-full p-8">
+          <div className="flex flex-col h-full max-w-6xl w-full p-4 md:p-8">
             <h1 className="text-[22px] font-semibold text-slate-900 mb-8 shrink-0">Account Settings</h1>
             
-            <div className="bg-white rounded-xl border border-slate-200 p-8 shadow-sm flex-1">
+            <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-8 shadow-sm flex-1">
               <h2 className="text-lg font-semibold text-slate-800 mb-6">Profile Information</h2>
               
-              <div className="grid grid-cols-2 gap-6 items-center mb-6">
-                <div className="flex items-center gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:items-center mb-6">
+                <div className="flex items-center gap-4 md:gap-6">
                   <div className="w-20 h-20 rounded-full bg-[#d8b4fe] text-[#6b21a8] flex items-center justify-center text-3xl font-medium shrink-0 shadow-sm">
                     A
                   </div>
@@ -184,7 +184,7 @@ export function SettingsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-6 mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                 <div>
                   <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Full Name</label>
                   <input type="text"  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#5b32f5]" />
@@ -195,7 +195,7 @@ export function SettingsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Phone Number</label>
                   <div className="flex">
@@ -218,10 +218,10 @@ export function SettingsPage() {
             </div>
           </div>
         ) : activeTab === 'defaults' ? (
-          <div className="max-w-4xl">
-             <h1 className="text-[22px] font-semibold text-slate-900 mb-8">Workspace Defaults</h1>
+          <div className="max-w-4xl p-4 md:p-8">
+             <h1 className="text-[22px] font-semibold text-slate-900 mb-6 md:mb-8">Workspace Defaults</h1>
              
-             <div className="bg-white rounded-xl border border-slate-200 p-8 shadow-sm mb-6">
+             <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-8 shadow-sm mb-6">
                <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Default capture mode</label>
                 <select value={s.modeChoice} onChange={(e) => setMode(e.target.value as any)} className="w-full max-w-xs px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#5b32f5]">
                   <option value="realtime">Realtime (streaming)</option>
@@ -231,7 +231,7 @@ export function SettingsPage() {
                 </select>
              </div>
              
-             <div className="bg-white rounded-xl border border-slate-200 p-8 shadow-sm">
+             <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-8 shadow-sm">
                 <h3 className="text-[15px] font-semibold text-slate-800 mb-6">System Health</h3>
                 <div className="flex flex-col gap-4 max-w-sm">
                   <div className="flex items-center justify-between">
@@ -246,9 +246,9 @@ export function SettingsPage() {
              </div>
           </div>
         ) : (
-          <div className="max-w-4xl">
-            <h1 className="text-[22px] font-semibold text-slate-900 mb-8 capitalize">{activeTab.replace('-', ' ')} Settings</h1>
-            <div className="bg-white rounded-xl border border-slate-200 p-8 shadow-sm flex items-center justify-center text-slate-400 py-24">
+          <div className="max-w-4xl p-4 md:p-8">
+            <h1 className="text-[22px] font-semibold text-slate-900 mb-6 md:mb-8 capitalize">{activeTab.replace('-', ' ')} Settings</h1>
+            <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-8 shadow-sm flex items-center justify-center text-slate-400 py-12 md:py-24">
                Coming soon...
             </div>
           </div>
