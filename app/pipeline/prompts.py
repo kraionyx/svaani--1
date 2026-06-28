@@ -15,7 +15,16 @@ SCRIBE_SYSTEM = (
 
 CLEAN_INSTRUCTION = (
     "Correct ONLY unambiguous speech-to-text word errors while preserving the exact clinical "
-    "meaning, the speaker labels, and the segment ids.\n"
+    "meaning and the segment ids.\n"
+    "SPEAKER ROLES — set each segment's `speaker` by UNDERSTANDING THE CONVERSATION, not by "
+    "copying the input label (the input label is an unreliable acoustic/heuristic guess and is "
+    "often wrong):\n"
+    "- the DOCTOR asks questions, examines, and gives advice/instructions;\n"
+    "- the PATIENT (or a CAREGIVER speaking for them) describes symptoms/history, usually in "
+    "the first person ('I have fever', 'my son has...');\n"
+    "- keep the SAME role for the same person consistently across the whole conversation; the "
+    "first speaker is NOT necessarily the doctor.\n"
+    "Only re-label `speaker`; never move text between segments or change segment ids.\n"
     "HARD CONSTRAINTS (safety-critical — breaking these fabricates clinical data):\n"
     "- NEVER change any number, dose, quantity, strength, frequency, vital value, age, or "
     "date. Copy every numeric token EXACTLY as transcribed — e.g. '1 mg' stays '1 mg'; do "

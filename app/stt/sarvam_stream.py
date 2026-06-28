@@ -51,6 +51,10 @@ async def open_stream(settings: Settings) -> AsyncIterator[Any]:
         mode=mode,
         input_audio_codec="pcm_s16le",      # raw 16-bit little-endian PCM frames
         sample_rate="16000",
+        # Segment utterances eagerly at brief pauses so live transcript text streams in WHILE
+        # the person speaks, instead of only arriving at flush/stop. (Sarvam VAD only emits a
+        # finalized "data" message on a detected end-of-speech pause.)
+        high_vad_sensitivity="true" if settings.sarvam_high_vad_sensitivity else "false",
     ) as sock:
         yield sock
 

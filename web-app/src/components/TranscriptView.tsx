@@ -69,7 +69,12 @@ export function TranscriptView() {
   const effective: 'raw' | 'tuned' = !hasTuned ? 'raw' : !hasRaw ? 'tuned' : view;
   const segs: Segment[] = effective === 'raw' ? rawSegs : cleanSegs;
 
-  const tunedRole = (seg: Segment) => roleById.get(seg.id) || seg.speaker || 'unknown';
+  // Prefer the cleaned segment's own speaker — the LLM now assigns it by conversation context
+  // — and fall back to the raw transcript's role (by id) only if the LLM left it unknown.
+  const tunedRole = (seg: Segment) => {
+    if (seg.speaker && seg.speaker !== 'unknown') return seg.speaker;
+    return roleById.get(seg.id) || 'unknown';
+  };
 
   const label = (seg: Segment) =>
     effective === 'raw'

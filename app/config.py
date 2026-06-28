@@ -51,7 +51,30 @@ class Settings(BaseSettings):
     # the WS handler streams live unlabeled partials, then runs the batch-diarized pass on
     # stop to recover speaker labels (hybrid). Set False to force batch-at-stop only.
     streaming_stt: bool = True
+    # Live speaker labels: streaming STT has no diarization, so each live segment is labeled
+    # by a cheap text heuristic (doctor/patient) for immediate on-screen attribution; the
+    # batch diarized pass on stop overwrites them with the authoritative labels. False ⇒ live
+    # segments stay 'unknown' until stop (the prior behaviour). See app/stt/streaming_diarizer.py.
+    live_speaker_labels: bool = True
+    # Per-recording audio caps. On Cloud Run the WS audio buffer lives in the in-memory
+    # filesystem (tmpfs), so max_audio_bytes is effectively a per-recording RAM cap; the
+    # worst-case instance audio RAM is roughly this × the Cloud Run --concurrency. Lower it
+    # (and cap concurrency) to bound memory; raise only if longer single recordings are needed.
+    max_audio_bytes: int = 50 * 1024 * 1024     # ~26 min @ 16 kHz mono PCM16
+    max_audio_frame_bytes: int = 1024 * 1024    # reject absurd single frames
+    # Optional: stream/persist consult audio to GCS instead of the local tempfile (keeps audio
+    # off Cloud Run instance RAM and hands it to the decoupled diarization worker). Empty ⇒
+    # local tempfile (dev/default). See app/storage/gcs_audio.py.
+    gcs_audio_bucket: str = ""
+    gcs_audio_prefix: str = "audio/"
     sarvam_streaming_model: str = "saaras:v3"  # streaming model (saaras:v3 = state-of-the-art)
+    # Voice-activity-detection sensitivity for the streaming socket. Sarvam only emits a
+    # finalized utterance ("data" message) when its VAD detects an end-of-speech pause; with
+    # the server default and continuous code-mixed speech that pause rarely fires, so live
+    # transcript text only appeared at Stop (flush). 'true' makes the VAD segment more eagerly
+    # at brief pauses → live text streams in as the person speaks. Override via
+    # SCRIBE_SARVAM_HIGH_VAD_SENSITIVITY=false to fall back to the server default.
+    sarvam_high_vad_sensitivity: bool = True
     # On stop, how long to wait for the batch-diarized pass before falling back to the
     # live (already-captured) streamed segments. Bounds the post-consult wait so a slow
     # diarization job never blocks the draft — speaker labels are an enhancement, not a gate.
@@ -68,7 +91,13 @@ class Settings(BaseSettings):
     vertex_location: str = "asia-south1"       # Mumbai — India PHI residency (DPDPA)
     gemini_model: str = "gemini-3.5-flash"     # newest Flash; ~3x faster than 2.5-flash here. Override via SCRIBE_GEMINI_MODEL.
     llm_temperature: float = 0.0               # deterministic structuring; we never "create"
-    llm_max_output_tokens: int = 8192
+    # Output ceiling. Was 8192 — too small for the single-pass "combined" call, which re-emits
+    # the WHOLE clean transcript + extraction + risk in one response. On a real ~49-segment
+    # consult that overflowed 8192 → Gemini returned MAX_TOKENS, resp.text was empty, and the
+    # pipeline SILENTLY fell back to the 3-call staged path (≈+30-40s). Flash supports up to 64K
+    # output; 32768 covers normal consults with headroom (it's a cap, not a reservation — you
+    # only pay for tokens actually produced).
+    llm_max_output_tokens: int = 32768
     # Gemini "thinking" budget in tokens. 0 disables thinking entirely on Flash/
     # Flash-Lite (lowest latency for pure structuring); -1 = dynamic; Pro ignores 0
     # and clamps to its minimum (the client self-heals a 400 by retrying without it).
@@ -78,6 +107,11 @@ class Settings(BaseSettings):
     # of three (the dominant cost is per-call round-trip latency, not tokens). Falls back
     # to the staged path automatically on any error. Set False to force the staged path.
     single_pass_llm: bool = True
+    # Length gate for the single-pass call: above this many transcript chars the combined
+    # output would risk overflowing even the raised token cap, so route straight to the staged
+    # path (whose per-call outputs are individually smaller) instead of paying for a doomed
+    # combined call first. ~12k chars ≈ a long consult that still fits 32K output tokens.
+    single_pass_max_chars: int = 12000
 
     # ── Conversation intelligence (Goals 1-5) ───────────────────────────────
     # Resolve speaker relationships + the referenced patient ("patient = son, not the
