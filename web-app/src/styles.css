@@ -1030,6 +1030,28 @@ ul.verified li {
   box-shadow: inset 0 -1px 0 var(--gold);
 }
 
+/* Transcript header: title + Raw/Tuned toggle on one row. */
+.transcript-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transcript-head h2 {
+  margin: 0;
+}
+
+/* Live transcript: plain running text, no speaker chips (streaming has no diarization). */
+.transcript-live-line {
+  margin: 0 0 10px;
+  line-height: 1.6;
+}
+
+.transcript-live-line:last-child {
+  margin-bottom: 0;
+}
+
 /* ── Modal & toast ───────────────────────────────────────────────────────── */
 .modal {
   position: fixed;

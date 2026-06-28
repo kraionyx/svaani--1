@@ -76,7 +76,7 @@ export interface Note { session_id: string; template_id: string; template_versio
 export interface RiskMarker { type: string; severity: string; message: string; evidence_span_ids: string[]; evidence_text?: string; }
 export interface Risk { session_id: string; score: number; markers: RiskMarker[]; disclaimer: string; }
 export interface Grounding { kept: number; dropped: string[]; flagged: string[]; verified: string[]; mismatched: string[]; }
-export interface Segment { id: string; speaker: string; text: string; language: string; confidence: number; }
+export interface Segment { id: string; speaker: string; text: string; language: string; confidence: number; diarized_label?: string | null; }
 export interface RawTranscript { session_id: string; segments: Segment[]; }
 export interface CleanTranscript { session_id: string; segments: Segment[]; corrections: any[]; low_confidence_span_ids: string[]; }
 export type ReviewState = 'listening' | 'processing' | 'draft' | 'in_review' | 'edited' | 'approved' | 'finalized' | 'escalation_required';
